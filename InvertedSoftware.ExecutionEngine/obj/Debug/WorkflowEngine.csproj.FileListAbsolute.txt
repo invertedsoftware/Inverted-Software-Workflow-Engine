@@ -1,0 +1,10 @@
+c:\users\gal_ratner\documents\visual studio 2010\Projects\WorkflowEngine\ExecutionEngine\obj\Debug\ResolveAssemblyReference.cache
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\ExecutionEngine\bin\Debug\WorkflowEngine.DataObjects.dll
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\ExecutionEngine\bin\Debug\WorkflowEngine.DataObjects.pdb
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\ExecutionEngine\bin\Debug\WorkflowEngine.dll
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\ExecutionEngine\bin\Debug\WorkflowEngine.pdb
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\ExecutionEngine\bin\Debug\WorkflowEngine.Common.dll
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\ExecutionEngine\bin\Debug\WorkflowEngine.Common.pdb
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\ExecutionEngine\obj\Debug\WorkflowEngine.dll
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\ExecutionEngine\obj\Debug\WorkflowEngine.pdb
+C:\Users\gal_ratner\documents\visual studio 2010\Projects\WorkflowEngine\ExecutionEngine\bin\Debug\Config\Workflow.xml

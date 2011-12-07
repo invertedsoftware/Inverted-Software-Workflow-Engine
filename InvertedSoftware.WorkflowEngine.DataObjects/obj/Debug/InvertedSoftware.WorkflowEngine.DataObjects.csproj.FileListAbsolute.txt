@@ -1,0 +1,10 @@
+C:\Documents and Settings\Gal Ratner\My Documents\Visual Studio 2010\Projects\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\bin\Debug\InvertedSoftware.WorkflowEngine.DataObjects.dll
+C:\Documents and Settings\Gal Ratner\My Documents\Visual Studio 2010\Projects\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\bin\Debug\InvertedSoftware.WorkflowEngine.DataObjects.pdb
+C:\Documents and Settings\Gal Ratner\My Documents\Visual Studio 2010\Projects\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\obj\Debug\ResolveAssemblyReference.cache
+C:\Documents and Settings\Gal Ratner\My Documents\Visual Studio 2010\Projects\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\obj\Debug\InvertedSoftware.WorkflowEngine.DataObjects.dll
+C:\Documents and Settings\Gal Ratner\My Documents\Visual Studio 2010\Projects\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\obj\Debug\InvertedSoftware.WorkflowEngine.DataObjects.pdb
+C:\Users\gal_ratner\Downloads\WorkflowEngine\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\bin\Debug\InvertedSoftware.WorkflowEngine.DataObjects.dll
+C:\Users\gal_ratner\Downloads\WorkflowEngine\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\bin\Debug\InvertedSoftware.WorkflowEngine.DataObjects.pdb
+C:\Users\gal_ratner\Downloads\WorkflowEngine\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\obj\Debug\ResolveAssemblyReference.cache
+C:\Users\gal_ratner\Downloads\WorkflowEngine\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\obj\Debug\InvertedSoftware.WorkflowEngine.DataObjects.dll
+C:\Users\gal_ratner\Downloads\WorkflowEngine\WorkflowEngine\InvertedSoftware.WorkflowEngine.DataObjects\obj\Debug\InvertedSoftware.WorkflowEngine.DataObjects.pdb

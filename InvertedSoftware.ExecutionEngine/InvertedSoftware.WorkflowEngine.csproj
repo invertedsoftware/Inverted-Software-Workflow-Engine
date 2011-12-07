@@ -1,0 +1,90 @@
+﻿<?xml version="1.0" encoding="utf-8"?>
+<Project ToolsVersion="4.0" DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration Condition=" '$(Configuration)' == '' ">Debug</Configuration>
+    <Platform Condition=" '$(Platform)' == '' ">AnyCPU</Platform>
+    <ProductVersion>8.0.30703</ProductVersion>
+    <SchemaVersion>2.0</SchemaVersion>
+    <ProjectGuid>{3ADF8F65-8AD2-4D8E-9D02-E05DD0BF338B}</ProjectGuid>
+    <OutputType>Library</OutputType>
+    <AppDesignerFolder>Properties</AppDesignerFolder>
+    <RootNamespace>InvertedSoftware.WorkflowEngine</RootNamespace>
+    <AssemblyName>InvertedSoftware.WorkflowEngine</AssemblyName>
+    <TargetFrameworkVersion>v4.0</TargetFrameworkVersion>
+    <FileAlignment>512</FileAlignment>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Debug|AnyCPU' ">
+    <DebugSymbols>true</DebugSymbols>
+    <DebugType>full</DebugType>
+    <Optimize>false</Optimize>
+    <OutputPath>bin\Debug\</OutputPath>
+    <DefineConstants>DEBUG;TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <PropertyGroup Condition=" '$(Configuration)|$(Platform)' == 'Release|AnyCPU' ">
+    <DebugType>pdbonly</DebugType>
+    <Optimize>true</Optimize>
+    <OutputPath>bin\Release\</OutputPath>
+    <DefineConstants>TRACE</DefineConstants>
+    <ErrorReport>prompt</ErrorReport>
+    <WarningLevel>4</WarningLevel>
+  </PropertyGroup>
+  <ItemGroup>
+    <Reference Include="System" />
+    <Reference Include="System.Configuration" />
+    <Reference Include="System.Core" />
+    <Reference Include="System.Messaging" />
+    <Reference Include="System.ServiceModel" />
+    <Reference Include="System.Transactions" />
+    <Reference Include="System.Xml.Linq" />
+    <Reference Include="System.Data.DataSetExtensions" />
+    <Reference Include="Microsoft.CSharp" />
+    <Reference Include="System.Data" />
+    <Reference Include="System.Xml" />
+  </ItemGroup>
+  <ItemGroup>
+    <Compile Include="Config\EngineConfiguration.cs" />
+    <Compile Include="Config\WorkflowConfiguration.cs" />
+    <Compile Include="Execution\IExecutor.cs" />
+    <Compile Include="Execution\PipelinedExecutor.cs" />
+    <Compile Include="Execution\SequentialExecutor.cs" />
+    <Compile Include="Execution\StepExecutor.cs" />
+    <Compile Include="FrameworkManager.cs" />
+    <Compile Include="JobTimer.cs" />
+    <Compile Include="Messages\ExampleMessage.cs" />
+    <Compile Include="Messages\IWorkflowMessage.cs" />
+    <Compile Include="Messages\WorkflowErrorMessage.cs" />
+    <Compile Include="QueueOperationsHandler.cs" />
+    <Compile Include="Processor.cs" />
+    <Compile Include="Properties\AssemblyInfo.cs" />
+    <Compile Include="Steps\CopyFiles.cs" />
+    <Compile Include="Steps\IStep.cs" />
+    <Compile Include="Steps\RenameFiles.cs" />
+    <Compile Include="Steps\StepFactory.cs" />
+  </ItemGroup>
+  <ItemGroup>
+    <Content Include="Config\Workflow.xml">
+      <SubType>Designer</SubType>
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </Content>
+  </ItemGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\InvertedSoftware.WorkflowEngine.Common\InvertedSoftware.WorkflowEngine.Common.csproj">
+      <Project>{837CE35C-5478-4652-B186-9AAD18C49D57}</Project>
+      <Name>WorkflowEngine.Common</Name>
+    </ProjectReference>
+    <ProjectReference Include="..\InvertedSoftware.WorkflowEngine.DataObjects\InvertedSoftware.WorkflowEngine.DataObjects.csproj">
+      <Project>{C934A13C-7E8D-4D86-BF61-D9F35974FC6A}</Project>
+      <Name>WorkflowEngine.DataObjects</Name>
+    </ProjectReference>
+  </ItemGroup>
+  <Import Project="$(MSBuildToolsPath)\Microsoft.CSharp.targets" />
+  <!-- To modify your build process, add your task inside one of the targets below and uncomment it. 
+       Other similar extension points exist, see Microsoft.Common.targets.
+  <Target Name="BeforeBuild">
+  </Target>
+  <Target Name="AfterBuild">
+  </Target>
+  -->
+</Project>

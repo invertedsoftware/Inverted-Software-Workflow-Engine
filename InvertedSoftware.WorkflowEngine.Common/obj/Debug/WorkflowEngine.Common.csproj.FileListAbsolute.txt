@@ -1,0 +1,5 @@
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.Common\bin\Debug\WorkflowEngine.Common.dll
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.Common\bin\Debug\WorkflowEngine.Common.pdb
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.Common\obj\Debug\ResolveAssemblyReference.cache
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.Common\obj\Debug\WorkflowEngine.Common.dll
+C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.Common\obj\Debug\WorkflowEngine.Common.pdb
