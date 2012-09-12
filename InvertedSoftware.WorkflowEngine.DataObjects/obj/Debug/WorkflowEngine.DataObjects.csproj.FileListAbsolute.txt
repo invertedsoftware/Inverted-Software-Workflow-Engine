@@ -1,5 +1,0 @@
-C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.DataObjects\bin\Debug\WorkflowEngine.DataObjects.dll
-C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.DataObjects\bin\Debug\WorkflowEngine.DataObjects.pdb
-C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.DataObjects\obj\Debug\ResolveAssemblyReference.cache
-C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.DataObjects\obj\Debug\WorkflowEngine.DataObjects.dll
-C:\Users\gal_ratner\Documents\Visual Studio 2010\Projects\WorkflowEngine\WorkflowEngine.DataObjects\obj\Debug\WorkflowEngine.DataObjects.pdb

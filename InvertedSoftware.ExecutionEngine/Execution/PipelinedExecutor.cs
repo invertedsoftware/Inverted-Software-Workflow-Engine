@@ -12,6 +12,9 @@ using System.Threading.Tasks;
 using InvertedSoftware.WorkflowEngine.Common.Exceptions;
 using InvertedSoftware.WorkflowEngine.DataObjects;
 using InvertedSoftware.WorkflowEngine.Messages;
+using System.Threading.Tasks.Dataflow;
+using System.Collections.Generic;
+using InvertedSoftware.WorkflowEngine.Config;
 
 namespace InvertedSoftware.WorkflowEngine.Execution
 {
@@ -27,106 +30,61 @@ namespace InvertedSoftware.WorkflowEngine.Execution
             set
             {
                 processorJob = value;
-                Task.Factory.StartNew(() => LoadPipeline());
+                LoadPipeline();
             }
         }
-        private StepExecutor stepExecutor = null;
+        private StepExecutor stepExecutor = new StepExecutor();
+        private CancellationTokenSource cts=  new CancellationTokenSource();
+        private List<TransformBlock<PipelineInfo, PipelineInfo>> workerBlocks = new List<TransformBlock<PipelineInfo, PipelineInfo>>();
 
-        private CancellationTokenSource cts;
-        private CancellationToken token;
-        private BlockingCollection<PipelineInfo>[] stepsPipeline;
-        private Task[] stepsTasks;
-        private BlockingCollection<PipelineInfo> jobEndNodify = new BlockingCollection<PipelineInfo>();
-
-        public PipelinedExecutor()
-        {
-            stepExecutor = new StepExecutor();
-        }
-
-        /// <summary>
-        /// Set up all the tasks and blocking collections to process the steps
-        /// When a job is picked up, simply pump in into the first BlockingCollection and let the pipeline run all the steps
-        /// </summary>
         private void LoadPipeline()
         {
-            cts = new CancellationTokenSource();
-            token = cts.Token;
-            stepsPipeline = new BlockingCollection<PipelineInfo>[processorJob.WorkFlowSteps.Count]; // We need a BlockingCollections to hold staps between executions
-            stepsTasks = new Task[processorJob.WorkFlowSteps.Count]; // We need a Tasks to produce and consume steps from the BlockingCollections
             for (int i = 0; i < processorJob.WorkFlowSteps.Count; i++)
             {
-                int stepCount = i;
-                stepsPipeline[stepCount] = new BlockingCollection<PipelineInfo>();
-                if (stepCount < processorJob.WorkFlowSteps.Count - 1)// The last step doesnt need to be added to the next BlockingCollection so simply finish the job
-                    stepsTasks[stepCount] = Task.Factory.StartNew(() => RunPipelinedStep(stepsPipeline[stepCount], stepsPipeline[stepCount + 1], cts, stepCount));
-                else
-                    stepsTasks[stepCount] = Task.Factory.StartNew(() => RunPipelinedStep(stepsPipeline[stepCount], null, cts, stepCount));
-            }
-            Task.WaitAll(stepsTasks); // Wait until CancellationToken has been called
-        }
-
-        /// <summary>
-        /// Run a step by consuming it from the currentPipelineStep BlockingCollection and then adding it to the nextPipelineStep BlockingCollection
-        /// </summary>
-        /// <param name="currentPipelineStep"></param>
-        /// <param name="nextPipelineStep"></param>
-        /// <param name="cts"></param>
-        /// <param name="stepNumber"></param>
-        private void RunPipelinedStep(BlockingCollection<PipelineInfo> currentPipelineStep,
-            BlockingCollection<PipelineInfo> nextPipelineStep,
-            CancellationTokenSource cts,
-            int stepNumber)
-        {
-            var token = cts.Token;
-            int currentStepNumber = stepNumber;
-
-            try
-            {
-                // This loop will block until there are new elements in the currentPipelineStep
-                foreach (var current in currentPipelineStep.GetConsumingEnumerable())
+                TransformBlock<PipelineInfo, PipelineInfo> workerBlock = new TransformBlock<PipelineInfo, PipelineInfo>(pi =>
                 {
-                    if (token.IsCancellationRequested)
-                        break;
-                    PipelineInfo currentPipelineInfo = current; // The job info from the pipeline
-                    ProcessorStep workflowStep = currentPipelineInfo.CurrentJob.WorkFlowSteps[stepNumber];
-                    Task.Factory.StartNew<bool>(() => RunParalleledPipelinedStep(currentPipelineInfo, workflowStep, currentStepNumber))
-                        .ContinueWith((result) =>
-                        {
-                            if (result.Result && nextPipelineStep != null) // Add The job info info to the next section of the pipeline.
-                                nextPipelineStep.Add(currentPipelineInfo, token);
-                            else if (result.Result && nextPipelineStep == null) // This is the last step in a job 
-                            {
-                                // If all steps ran without error report successful job compilation
-                                Processor.ReportJobComplete(currentPipelineInfo.WorkflowMessage, currentPipelineInfo.CurrentJob);
-                                jobEndNodify.Add(currentPipelineInfo);
-                            }
-                            else // Job error
-                                jobEndNodify.Add(currentPipelineInfo);
-                        });
+                    return RunParalleledPipelinedStep(pi);
+                },
+                new ExecutionDataflowBlockOptions
+                {
+                    CancellationToken = cts.Token,
+                    MaxDegreeOfParallelism = EngineConfiguration.FrameworkMaxThreads
+                });
+
+                if (workerBlocks.Count > 0)
+                {
+                    // Connect the dataflow blocks to form a pipeline. 
+                    workerBlocks[workerBlocks.Count - 1].LinkTo<PipelineInfo>(workerBlock);
                 }
+                workerBlocks.Add(workerBlock);
             }
-            catch (Exception e)
+
+            ProcessJobEnded();
+        }
+
+        private async void ProcessJobEnded() 
+        {
+            while (true)
             {
-                cts.Cancel();
-                if (!(e is OperationCanceledException))
-                    throw;
-            }
-            finally
-            {
-                if (nextPipelineStep != null)
-                    nextPipelineStep.CompleteAdding();
+                PipelineInfo input = await workerBlocks[workerBlocks.Count - 2].ReceiveAsync(cts.Token);
+                if (input.IsInProcess) // All the speps where successful
+                    Processor.ReportJobComplete(input.WorkflowMessage, input.CurrentJob);
             }
         }
 
         /// <summary>
-        /// Once a step has been picked up from the pipeline this method executes it.
+        /// Run a step
         /// </summary>
         /// <param name="currentPipelineInfo"></param>
         /// <param name="workflowStep"></param>
         /// <param name="currentStepNumber"></param>
-        /// <returns></returns>
-        private bool RunParalleledPipelinedStep(PipelineInfo currentPipelineInfo, ProcessorStep workflowStep, int currentStepNumber)
+        /// <returns>The PipelineInfo to be passed to the next step</returns>
+        private PipelineInfo RunParalleledPipelinedStep(PipelineInfo currentPipelineInfo)
         {
+            if (!currentPipelineInfo.IsInProcess) // This job has been canceled.
+                return currentPipelineInfo;
+
+            ProcessorStep workflowStep = currentPipelineInfo.CurrentJob.WorkFlowSteps[currentPipelineInfo.CurrentStepNumber];
             try
             {
                 workflowStep.RunStatus = FrameworkStepRunStatus.Waiting;
@@ -134,7 +92,9 @@ namespace InvertedSoftware.WorkflowEngine.Execution
                     stepExecutor.RunFrameworkStep(currentPipelineInfo.WorkflowMessage, currentPipelineInfo.RetryStepTimes, workflowStep, currentPipelineInfo.CurrentJob, currentPipelineInfo.IsCheckDepends);
                 else if (workflowStep.RunMode == FrameworkStepRunMode.MTA)
                     Task.Factory.StartNew(() => stepExecutor.RunFrameworkStep(currentPipelineInfo.WorkflowMessage, currentPipelineInfo.RetryStepTimes, workflowStep, currentPipelineInfo.CurrentJob, currentPipelineInfo.IsCheckDepends));
-                return true;
+             
+                currentPipelineInfo.CurrentStepNumber++;
+                return currentPipelineInfo;
             }
             catch (Exception e)
             {
@@ -150,17 +110,20 @@ namespace InvertedSoftware.WorkflowEngine.Execution
                         // Try the job again
                         if (currentPipelineInfo.RetryJobTimes <= workflowStep.RetryTimes)
                             RunFrameworkJob(currentPipelineInfo.WorkflowMessage, currentPipelineInfo.RetryJobTimes, currentPipelineInfo.IsCheckDepends);
-                        return false;
+                        currentPipelineInfo.IsInProcess = false;
+                        return currentPipelineInfo;
                     case OnFrameworkStepError.Skip:
                         // Skip this step. Doing nothing here will skip it
                         Processor.ReportJobError(e, workflowStep, currentPipelineInfo.WorkflowMessage, currentPipelineInfo.CurrentJob);
-                        return true;
+                        currentPipelineInfo.CurrentStepNumber++;
+                        return currentPipelineInfo;
                     case OnFrameworkStepError.Exit:
                         // Push to to error queue with the error and do not continue to the next pipe
                         Processor.ReportJobError(e, workflowStep, currentPipelineInfo.WorkflowMessage, currentPipelineInfo.CurrentJob);
-                        return false;
+                        currentPipelineInfo.IsInProcess = false;
+                        return currentPipelineInfo;
                     default:
-                        return false;
+                        return currentPipelineInfo;
                 }
             }
         }
@@ -173,8 +136,6 @@ namespace InvertedSoftware.WorkflowEngine.Execution
         /// <param name="isCheckDepends"></param>
         public void RunFrameworkJob(IWorkflowMessage workflowMessage, int retryJobTimes, bool isCheckDepends)
         {
-            if (stepsPipeline == null)
-                return;
             // For each job, open a new ProcessorJob to keep track of logging
             ProcessorJob currentJob = (ProcessorJob)processorJob.Clone();
             // Add the job for the first pipeline
@@ -184,12 +145,16 @@ namespace InvertedSoftware.WorkflowEngine.Execution
                 IsCheckDepends = isCheckDepends,
                 RetryJobTimes = retryJobTimes,
                 RetryStepTimes = 0,
-                WorkflowMessage = workflowMessage
+                WorkflowMessage = workflowMessage,
+                IsInProcess = true, 
+                CurrentStepNumber = 0
             };
-            stepsPipeline[0].Add(pipelineInfo);
+            int currentJobsCount =  workerBlocks[0].InputCount;
+            workerBlocks[0].Post(pipelineInfo);
+
             // Block untill a job is finished
             // This is done to regulate execution rate
-            jobEndNodify.Take();
+            workerBlocks[workerBlocks.Count - 1].OutputAvailableAsync(cts.Token).Wait();
         }
     }
 }

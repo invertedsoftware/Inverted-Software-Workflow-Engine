@@ -15,12 +15,15 @@ using InvertedSoftware.WorkflowEngine.Messages;
 using InvertedSoftware.WorkflowEngine.Config;
 using InvertedSoftware.WorkflowEngine.DataObjects;
 using InvertedSoftware.WorkflowEngine.Common.Exceptions;
+using System.IO;
+using System.Runtime.Serialization.Formatters.Binary;
 
 
 namespace InvertedSoftware.WorkflowEngine
 {
     public static class FrameworkManager
     {
+        private static Object activeQueueSearchLock = new Object();
         /// <summary>
         /// Add a job for the framework to process
         /// </summary>
@@ -127,37 +130,40 @@ namespace InvertedSoftware.WorkflowEngine
             //If this is a pickup, pick it from the queues in a reverse order
             // Get the first queue with messages
             ProcessorQueue queue = new ProcessorQueue();
-            if (queueOperationType == QueueOperationType.Pickup)
-                processorJob.ProcessorQueues.Reverse();
 
-            foreach (ProcessorQueue processorQueue in processorJob.ProcessorQueues)
-            {
-                MessageQueue workflowQueue = new MessageQueue(processorQueue.MessageQueue);
-                queue = processorQueue;
+            lock (activeQueueSearchLock)
+            {    
+                if (queueOperationType == QueueOperationType.Pickup)
+                    processorJob.ProcessorQueues.Reverse();
 
-                try
+                foreach (ProcessorQueue processorQueue in processorJob.ProcessorQueues)
                 {
-                    using (MessageQueue msmq = new MessageQueue(processorQueue.MessageQueue))
+                    MessageQueue workflowQueue = new MessageQueue(processorQueue.MessageQueue);
+                    queue = processorQueue;
+
+                    try
                     {
-                        msmq.Peek(new TimeSpan(0));
-                        break;
-                    }
-                }
-                catch (MessageQueueException e)
-                {
-                    if (e.MessageQueueErrorCode == MessageQueueErrorCode.IOTimeout)
-                    {
-                        // The queue is is available and empty it can be used for delivery
-                        if (queueOperationType == QueueOperationType.Delivery)
+                        using (MessageQueue msmq = new MessageQueue(processorQueue.MessageQueue))
+                        {
+                            msmq.Peek(new TimeSpan(0));
                             break;
+                        }
                     }
+                    catch (MessageQueueException e)
+                    {
+                        if (e.MessageQueueErrorCode == MessageQueueErrorCode.IOTimeout)
+                        {
+                            // The queue is is available and empty it can be used for delivery
+                            if (queueOperationType == QueueOperationType.Delivery)
+                                break;
+                        }
+                    }
+                    catch (Exception) { }
                 }
-                catch (Exception) { }
+                // Reverse the queue list back to the original order
+                if (queueOperationType == QueueOperationType.Pickup)
+                    processorJob.ProcessorQueues.Reverse();
             }
-            // Reverse the queue list back to the original order
-            if (queueOperationType == QueueOperationType.Pickup)
-                processorJob.ProcessorQueues.Reverse();
-
             return queue;
         }
 
@@ -210,5 +216,7 @@ namespace InvertedSoftware.WorkflowEngine
         public int RetryJobTimes { get; set; }
         public ProcessorJob CurrentJob { get; set; }
         public bool IsCheckDepends { get; set; }
+        public bool IsInProcess { get; set; }
+        public int CurrentStepNumber { get; set; }
     }
 }

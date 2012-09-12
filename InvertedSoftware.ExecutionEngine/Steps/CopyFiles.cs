@@ -33,7 +33,10 @@ namespace InvertedSoftware.WorkflowEngine.Steps
 			{
 				Parallel.ForEach<string>(Directory.EnumerateFiles(myMessage.CopyFilesFrom, "*"), f =>
 				{
-					File.Copy(f, myMessage.CopyFilesTo + @"\" + Path.GetFileName(f), true);
+                    try
+                    {
+                        File.Copy(f, myMessage.CopyFilesTo + @"\" + Path.GetFileName(f), true);
+                    }catch(Exception){}
 				});
 			}
 			catch (Exception e)

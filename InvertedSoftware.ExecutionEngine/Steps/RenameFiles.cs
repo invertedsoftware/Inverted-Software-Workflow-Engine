@@ -30,9 +30,13 @@ namespace InvertedSoftware.WorkflowEngine.Steps
 
 			try
 			{
-				Parallel.ForEach<string>(Directory.EnumerateFiles(myMessage.CopyFilesTo, "*"), f =>
+				Parallel.ForEach<string>(Directory.EnumerateFiles(myMessage.CopyFilesTo, "*.jpg"), f =>
 				{
-					File.Move(f, f + ".renamed");
+                    try
+                    {
+                        File.Move(f, f + "." + Guid.NewGuid());
+                    }
+                    catch (Exception) { }
 				});
 			}
 			catch (Exception e)

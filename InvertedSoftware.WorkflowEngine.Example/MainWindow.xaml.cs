@@ -72,22 +72,22 @@ namespace InvertedSoftware.WorkflowEngine.Example
 		/// </summary>
 		/// <param name="sender"></param>
 		/// <param name="e"></param>
-		private void button2_Click(object sender, RoutedEventArgs e)
-		{
-			try
-			{
-				ExampleMessage message = new ExampleMessage()
-					{
-						CopyFilesFrom = @"C:\FrameworkTest\Source\",
-						CopyFilesTo = @"C:\FrameworkTest\Destination\"
-					};
-				FrameworkManager.AddFrameworkJob(JobName, message);
-			}
-			catch (Exception ex)
-			{
-				MessageBox.Show(ex.ToString());
-			}
-		}
+        private void button2_Click(object sender, RoutedEventArgs e)
+        {
+            try
+            {
+                ExampleMessage message = new ExampleMessage()
+                    {
+                        CopyFilesFrom = @"C:\FrameworkTest\Source\",
+                        CopyFilesTo = @"C:\FrameworkTest\Destination\"
+                    };
+                FrameworkManager.AddFrameworkJob(JobName, message);
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show(ex.ToString());
+            }
+        }
 
 		/// <summary>
 		/// Stop the framework
