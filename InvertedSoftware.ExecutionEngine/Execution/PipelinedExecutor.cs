@@ -65,8 +65,8 @@ namespace InvertedSoftware.WorkflowEngine.Execution
         {
             while (true)
             {
-                PipelineInfo input = await workerBlocks[workerBlocks.Count - 2].ReceiveAsync(cts.Token);
-                if (input.IsInProcess) // All the speps where successful
+                PipelineInfo input = await workerBlocks[workerBlocks.Count - 1].ReceiveAsync(cts.Token);
+                if (input.IsInProcess) // All the steps where successful
                     Processor.ReportJobComplete(input.WorkflowMessage, input.CurrentJob);
             }
         }
