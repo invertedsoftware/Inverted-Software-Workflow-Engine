@@ -32,69 +32,83 @@
 
 <p><img src="http://galratner.com/cfs-filesystemfile.ashx/__key/CommunityServer.Blogs.Components.WeblogFiles/net/6562.FrameworkWorkload.jpg" alt=""></p>
 
-<p>A consumer can notify the system when it is done or when an error occurs and a producer can choose to wait for a result and act on it. The open release does not include the real time work report or the producer wait system and if you need them you will have to write the code in your own app. It’s easy and takes less than ten lines of code.
-</p>
+<p>A consumer can notify the system when it is done or when an error occurs and a producer can choose to wait for a result and act on it. The open release does not include the real time work report or the producer wait system and if you need them you will have to write the code in your own app. It’s easy and takes less than ten lines of code.</p>
+
+<div class="highlight highlight-XML"><pre><span class="nt">&lt;Workflow&gt;</span>
+    <span class="nt">&lt;Job</span> <span class="na">Name=</span><span class="s">"ExampleJob"</span> <span class="na">MessageClass=</span><span class="s">"ExampleMessage"</span> <span class="na">NotifyComplete=</span><span class="s">"true"</span> <span class="na">MaxRunTimeMilliseconds=</span><span class="s">"36000000"</span><span class="nt">&gt;</span>
+        <span class="nt">&lt;Queues&gt;</span>
+            <span class="nt">&lt;Queue</span> <span class="na">MessageQueue=</span><span class="s">".\Private$\WorkflowEngine.ExampleJob"</span> <span class="na">ErrorQueue=</span><span class="s">".\Private$\WorkflowEngine.ExampleJobError"</span> <span class="na">PoisonQueue=</span><span class="s">".\Private$\WorkflowEngine.ExampleJobPoison"</span> <span class="na">CompletedQueue=</span><span class="s">".\Private$\WorkflowEngine.ExampleJobComplete"</span> <span class="na">MessageQueueType=</span><span class="s">"Transactional"</span><span class="nt">&gt;&lt;/Queue&gt;</span>
+            <span class="nt">&lt;Queue</span> <span class="na">MessageQueue=</span><span class="s">".\Private$\WorkflowEngine.ExampleJobBackup"</span> <span class="na">ErrorQueue=</span><span class="s">".\Private$\WorkflowEngine.ExampleJobErrorBackup"</span> <span class="na">PoisonQueue=</span><span class="s">".\Private$\WorkflowEngine.ExampleJobPoisonBackup"</span> <span class="na">CompletedQueue=</span><span class="s">".\Private$\WorkflowEngine.ExampleJobCompleteBackup"</span> <span class="na">MessageQueueType=</span><span class="s">"Transactional"</span><span class="nt">&gt;&lt;/Queue&gt;</span>
+        <span class="nt">&lt;/Queues&gt;</span>
+        <span class="nt">&lt;Steps&gt;</span>
+            <span class="nt">&lt;Step</span> <span class="na">Name=</span><span class="s">"CopyFiles"</span> <span class="na">Group=</span><span class="s">"group1"</span> <span class="na">InvokeClass=</span><span class="s">"InvertedSoftware.WorkflowEngine.Steps.CopyFiles"</span> <span class="na">OnError=</span><span class="s">"Exit"</span> <span class="na">RetryTimes=</span><span class="s">"3"</span> <span class="na">WaitBetweenRetriesMilliseconds=</span><span class="s">"5000"</span> <span class="na">RunMode=</span><span class="s">"STA"</span> <span class="na">DependsOn=</span><span class="s">""</span> <span class="na">DependsOnGroup=</span><span class="s">""</span> <span class="na">WaitForDependsOnMilliseconds=</span><span class="s">""</span> <span class="na">RunAsDomain=</span><span class="s">""</span> <span class="na">RunAsUser=</span><span class="s">""</span> <span class="na">RunAsPassword=</span><span class="s">""</span><span class="nt">&gt;&lt;/Step&gt;</span>
+            <span class="nt">&lt;Step</span> <span class="na">Name=</span><span class="s">"RenameFiles"</span> <span class="na">Group=</span><span class="s">"group1"</span> <span class="na">InvokeClass=</span><span class="s">"InvertedSoftware.WorkflowEngine.Steps.RenameFiles"</span> <span class="na">OnError=</span><span class="s">"Exit"</span> <span class="na">RetryTimes=</span><span class="s">"3"</span> <span class="na">WaitBetweenRetriesMilliseconds=</span><span class="s">"5000"</span> <span class="na">RunMode=</span><span class="s">"STA"</span> <span class="na">DependsOn=</span><span class="s">"CopyFiles"</span> <span class="na">DependsOnGroup=</span><span class="s">""</span> <span class="na">WaitForDependsOnMilliseconds=</span><span class="s">""</span> <span class="na">RunAsDomain=</span><span class="s">""</span> <span class="na">RunAsUser=</span><span class="s">""</span> <span class="na">RunAsPassword=</span><span class="s">""</span><span class="nt">&gt;&lt;/Step&gt;</span>
+        <span class="nt">&lt;/Steps&gt;</span>
+    <span class="nt">&lt;/Job&gt;</span>
+<span class="nt">&lt;/Workflow&gt;</span>
+</pre></div>
 
 <p><strong>Calling the framework:</strong>
 In order for a producer to request a job execution it needs to call the FrameworkManager in code. A call looks like this:</p>
 
-<p><code>ExampleMessage message = new ExampleMessage()
-{
-        CopyFilesFrom = @"C:\FrameworkTest\Source\",
-        CopyFilesTo = @"C:\FrameworkTest\Destination\"
-};
-FrameworkManager.AddFrameworkJob(JobName, message);</code></p>
+<div class="highlight highlight-C#"><pre><span class="n">ExampleMessage</span> <span class="n">message</span> <span class="p">=</span> <span class="k">new</span> <span class="n">ExampleMessage</span><span class="p">()</span>
+<span class="p">{</span>
+        <span class="n">CopyFilesFrom</span> <span class="p">=</span> <span class="s">@"C:\FrameworkTest\Source\"</span><span class="p">,</span>
+        <span class="n">CopyFilesTo</span> <span class="p">=</span> <span class="s">@"C:\FrameworkTest\Destination\"</span>
+<span class="p">};</span>
+<span class="n">FrameworkManager</span><span class="p">.</span><span class="n">AddFrameworkJob</span><span class="p">(</span><span class="n">JobName</span><span class="p">,</span> <span class="n">message</span><span class="p">);</span>
+</pre></div>
 
-<p>FrameworkManager.AddFrameworkJob(JobName, message);
-A framework consumer must be started with a specific job name. Since the framework thread will block as long as the framework is running it is a good idea to start the framework in its own thread. The consumer’s code looks like this:</p>
+<p>A framework consumer must be started with a specific job name. Since the framework thread will block as long as the framework is running it is a good idea to start the framework in its own thread. The consumer’s code looks like this:</p>
 
-<p><code>Task.Factory.StartNew(() =&gt;
-{
-    try
-    {
-        frameworkProcessor.StartFramework(JobName);
-    }
-    catch (Exception ex)
-    {
-        MessageBox.Show("Framework Error." + ex.Message);
-    }
-});</code></p>
+<div class="highlight highlight-C#"><pre><span class="n">Task</span><span class="p">.</span><span class="n">Factory</span><span class="p">.</span><span class="n">StartNew</span><span class="p">(()</span> <span class="p">=&gt;</span>
+<span class="p">{</span>
+    <span class="k">try</span>
+    <span class="p">{</span>
+        <span class="n">frameworkProcessor</span><span class="p">.</span><span class="n">StartFramework</span><span class="p">(</span><span class="n">JobName</span><span class="p">);</span>
+    <span class="p">}</span>
+    <span class="k">catch</span> <span class="p">(</span><span class="n">Exception</span> <span class="n">ex</span><span class="p">)</span>
+    <span class="p">{</span>
+        <span class="n">MessageBox</span><span class="p">.</span><span class="n">Show</span><span class="p">(</span><span class="s">"Framework Error."</span> <span class="p">+</span> <span class="n">ex</span><span class="p">.</span><span class="n">Message</span><span class="p">);</span>
+    <span class="p">}</span>
+<span class="p">});</span>
+</pre></div>
 
-<p>Adding steps:</p>
+<p><strong>Adding steps:</strong>
+You can add as many steps as you like. Please see the example steps I have added to the steps folder. I always try and keep all the steps in the step folder as good practice. You can think about the steps as residing at the top of your business layer. They have access to the rest of the business layer and to the data layer (if you are doing layer cross cutting). Each step needs to implement the IStep interface and define a RunStep method accepting an IWorkflowMessage. RunStep will be the first method to be invoked in the step by the framework.</p>
 
-<p>You can add as many steps as you like. Please see the example steps I have added to the steps folder. I always try and keep all the steps in the step folder as good practice. You can think about the steps as residing at the top of your business layer. They have access to the rest of the business layer and to the data layer (if you are doing layer cross cutting). Each step needs to implement the IStep interface and define a RunStep method accepting an IWorkflowMessage. RunStep will be the first method to be invoked in the step by the framework.</p>
-
-<p><code>internal class CopyFiles : IStep
-    {
-        /// &lt;summary&gt;
-        /// The method executed by the framework
-        /// &lt;/summary&gt;
-        /// &lt;param name="message"&gt;&lt;/param&gt;
-        public void RunStep(IWorkflowMessage message)
-        {
-            ExampleMessage myMessage = message as ExampleMessage;
-            if (myMessage == null)
-                throw new WorkflowStepException("IWorkflowMessage is of the wrong type");
-            try
-            {
-                Parallel.ForEach&lt;string&gt;(Directory.EnumerateFiles(myMessage.CopyFilesFrom, "*"), f =&gt;
-                {
-                    File.Copy(f, myMessage.CopyFilesTo + @"\" + Path.GetFileName(f), true);
-                });
-            }
-            catch (Exception e)
-            {
-                throw new WorkflowStepException(e.Message, e);
-            }
-        }
-        /// &lt;summary&gt;
-        /// Dispose
-        /// &lt;/summary&gt;
-        public void Dispose()
-        {
-            GC.SuppressFinalize(this);
-        }
-    }</code></p>
+<div class="highlight highlight-C#"><pre><span class="k">internal</span> <span class="k">class</span> <span class="nc">CopyFiles</span> <span class="p">:</span> <span class="n">IStep</span>
+    <span class="p">{</span>
+        <span class="c1">/// &lt;summary&gt;</span>
+        <span class="c1">/// The method executed by the framework</span>
+        <span class="c1">/// &lt;/summary&gt;</span>
+        <span class="c1">/// &lt;param name="message"&gt;&lt;/param&gt;</span>
+        <span class="k">public</span> <span class="k">void</span> <span class="nf">RunStep</span><span class="p">(</span><span class="n">IWorkflowMessage</span> <span class="n">message</span><span class="p">)</span>
+        <span class="p">{</span>
+            <span class="n">ExampleMessage</span> <span class="n">myMessage</span> <span class="p">=</span> <span class="n">message</span> <span class="k">as</span> <span class="n">ExampleMessage</span><span class="p">;</span>
+            <span class="k">if</span> <span class="p">(</span><span class="n">myMessage</span> <span class="p">==</span> <span class="k">null</span><span class="p">)</span>
+                <span class="k">throw</span> <span class="k">new</span> <span class="nf">WorkflowStepException</span><span class="p">(</span><span class="s">"IWorkflowMessage is of the wrong type"</span><span class="p">);</span>
+            <span class="k">try</span>
+            <span class="p">{</span>
+                <span class="n">Parallel</span><span class="p">.</span><span class="n">ForEach</span><span class="p">&lt;</span><span class="kt">string</span><span class="p">&gt;(</span><span class="n">Directory</span><span class="p">.</span><span class="n">EnumerateFiles</span><span class="p">(</span><span class="n">myMessage</span><span class="p">.</span><span class="n">CopyFilesFrom</span><span class="p">,</span> <span class="s">"*"</span><span class="p">),</span> <span class="n">f</span> <span class="p">=&gt;</span>
+                <span class="p">{</span>
+                    <span class="n">File</span><span class="p">.</span><span class="n">Copy</span><span class="p">(</span><span class="n">f</span><span class="p">,</span> <span class="n">myMessage</span><span class="p">.</span><span class="n">CopyFilesTo</span> <span class="p">+</span> <span class="s">@"\"</span> <span class="p">+</span> <span class="n">Path</span><span class="p">.</span><span class="n">GetFileName</span><span class="p">(</span><span class="n">f</span><span class="p">),</span> <span class="k">true</span><span class="p">);</span>
+                <span class="p">});</span>
+            <span class="p">}</span>
+            <span class="k">catch</span> <span class="p">(</span><span class="n">Exception</span> <span class="n">e</span><span class="p">)</span>
+            <span class="p">{</span>
+                <span class="k">throw</span> <span class="k">new</span> <span class="nf">WorkflowStepException</span><span class="p">(</span><span class="n">e</span><span class="p">.</span><span class="n">Message</span><span class="p">,</span> <span class="n">e</span><span class="p">);</span>
+            <span class="p">}</span>
+        <span class="p">}</span>
+        <span class="c1">/// &lt;summary&gt;</span>
+        <span class="c1">/// Dispose</span>
+        <span class="c1">/// &lt;/summary&gt;</span>
+        <span class="k">public</span> <span class="k">void</span> <span class="nf">Dispose</span><span class="p">()</span>
+        <span class="p">{</span>
+            <span class="n">GC</span><span class="p">.</span><span class="n">SuppressFinalize</span><span class="p">(</span><span class="k">this</span><span class="p">);</span>
+        <span class="p">}</span>
+    <span class="p">}</span>
+</pre></div>
       </section>
     </div>
 
