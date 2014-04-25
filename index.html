@@ -8,15 +8,15 @@
     <link rel="stylesheet" type="text/css" href="stylesheets/pygment_trac.css" media="screen" />
     <link rel="stylesheet" type="text/css" href="stylesheets/print.css" media="print" />
 
-    <title>Inverted software workflow engine (codename Gazelle) by invertedsoftware</title>
+    <title>elastify.io by invertedsoftware</title>
   </head>
 
   <body>
 
     <header>
       <div class="container">
-        <h1>Inverted software workflow engine (codename Gazelle)</h1>
-        <h2>Project Gazelle. an Enterprise Processing Workflow Engine</h2>
+        <h1>elastify.io</h1>
+        <h2>elastify.io formaly project Gazelle. an Enterprise Processing Workflow Engine</h2>
 
         <section id="downloads">
           <a href="https://github.com/invertedsoftware/Inverted-Software-Workflow-Engine/zipball/master" class="btn">Download as .zip</a>
@@ -28,7 +28,7 @@
 
     <div class="container">
       <section id="main_content">
-        <p><strong>Gazelle</strong> is a dependency injection based workflow engine. The engine uses a workflow XML configuration file in order to decide what set of processing steps to execute on a request. The system is logically separated into producers and consumers. The producers produce a work request. They signal the framework that they need something done sometime in the future. They request work to be done and they don't sit around waiting for it. They simply continue executing code. For example: a producer can request a sales report to be calculated and emailed to the sales manager. The report might be generated on another process, another computer or even in another data center. The producer is unaware of when and where the report is generated, it simply knows a report will be emailed and continues on with its tasks. A consumer constantly listens to work requests. The request can come in from different channels. If parts of the systems are down, the consumer simply stops listening to work requests from it until it is up again. When a work request comes in, a consumer inspects the type of work to be done. It then reads the workflow for this type of request and executes the work steps sequentially or in parallel.</p>
+        <p><strong>elastify.io</strong> is a dependency injection based workflow engine. The engine uses a workflow XML configuration file in order to decide what set of processing steps to execute on a request. The system is logically separated into producers and consumers. The producers produce a work request. They signal the framework that they need something done sometime in the future. They request work to be done and they don't sit around waiting for it. They simply continue executing code. For example: a producer can request a sales report to be calculated and emailed to the sales manager. The report might be generated on another process, another computer or even in another data center. The producer is unaware of when and where the report is generated, it simply knows a report will be emailed and continues on with its tasks. A consumer constantly listens to work requests. The request can come in from different channels. If parts of the systems are down, the consumer simply stops listening to work requests from it until it is up again. When a work request comes in, a consumer inspects the type of work to be done. It then reads the workflow for this type of request and executes the work steps sequentially or in parallel.</p>
 
 <p><img src="http://galratner.com/cfs-filesystemfile.ashx/__key/CommunityServer.Blogs.Components.WeblogFiles/net/6562.FrameworkWorkload.jpg" alt=""></p>
 
