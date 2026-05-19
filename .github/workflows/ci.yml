@@ -2,9 +2,9 @@ name: CI
 
 on:
   pull_request:
-    branches: [main]
+    branches: [main, master, v2-net10-rewrite]
   push:
-    branches: [main]
+    branches: [main, master, v2-net10-rewrite]
 
 jobs:
   build:
