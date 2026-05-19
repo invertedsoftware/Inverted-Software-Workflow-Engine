@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>InvertedSoftware.WorkflowEngine.Queue.Kafka</RootNamespace>
+    <AssemblyName>InvertedSoftware.WorkflowEngine.Queue.Kafka</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>2.0.0</Version>
+    <Description>Apache Kafka IQueueProvider implementation for InvertedSoftware.WorkflowEngine.</Description>
+    <Authors>Inverted Software</Authors>
+    <PackageId>InvertedSoftware.WorkflowEngine.Queue.Kafka</PackageId>
+    <PackageTags>workflow;queue;kafka;confluent</PackageTags>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\InvertedSoftware.WorkflowEngine.Queue.Abstractions\InvertedSoftware.WorkflowEngine.Queue.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Confluent.Kafka" Version="2.10.1" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Options" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+</Project>

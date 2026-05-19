@@ -1,0 +1,39 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>InvertedSoftware.WorkflowEngine</RootNamespace>
+    <AssemblyName>InvertedSoftware.WorkflowEngine</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>2.1.1</Version>
+    <Description>Cross-platform .NET workflow execution engine with pluggable queue providers (RabbitMQ, Kafka, Azure Service Bus).</Description>
+    <Authors>Inverted Software</Authors>
+    <Company>Inverted Software</Company>
+    <Product>InvertedSoftware.WorkflowEngine</Product>
+    <Copyright>Copyright (c) Inverted Software. All rights reserved.</Copyright>
+    <PackageId>InvertedSoftware.WorkflowEngine</PackageId>
+    <PackageTags>workflow;engine;jobs;steps;queue;cross-platform;observability;opentelemetry</PackageTags>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\InvertedSoftware.WorkflowEngine.Common\InvertedSoftware.WorkflowEngine.Common.csproj" />
+    <ProjectReference Include="..\InvertedSoftware.WorkflowEngine.DataObjects\InvertedSoftware.WorkflowEngine.DataObjects.csproj" />
+    <ProjectReference Include="..\InvertedSoftware.WorkflowEngine.Queue.Abstractions\InvertedSoftware.WorkflowEngine.Queue.Abstractions.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" Version="10.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Diagnostics.HealthChecks.Abstractions" Version="10.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Config\Workflow.xml" CopyToOutputDirectory="Always" />
+    <None Update="Config\Workflow.xsd" CopyToOutputDirectory="Always" />
+  </ItemGroup>
+
+</Project>

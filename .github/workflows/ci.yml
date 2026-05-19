@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Restore
+        run: dotnet restore InvertedSoftware.WorkflowEngine.sln
+
+      # The WPF sample only builds on Windows. Other projects build on both.
+      - name: Build (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          for proj in \
+            InvertedSoftware.WorkflowEngine.Common \
+            InvertedSoftware.WorkflowEngine.DataObjects \
+            InvertedSoftware.WorkflowEngine.Queue.Abstractions \
+            InvertedSoftware.WorkflowEngine.Queue.Serialization \
+            InvertedSoftware.WorkflowEngine.Queue.InMemory \
+            InvertedSoftware.WorkflowEngine.Queue.RabbitMq \
+            InvertedSoftware.WorkflowEngine.Queue.Kafka \
+            InvertedSoftware.WorkflowEngine.Queue.AzureServiceBus \
+            InvertedSoftware.ExecutionEngine \
+            InvertedSoftware.WorkflowEngine.Sample.Console; do
+            dotnet build "$proj" --configuration Release --no-restore
+          done
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        run: dotnet build InvertedSoftware.WorkflowEngine.sln --configuration Release --no-restore
+
+      - name: Run console sample (smoke test)
+        if: matrix.os == 'ubuntu-latest'
+        run: dotnet run --project InvertedSoftware.WorkflowEngine.Sample.Console --configuration Release --no-build

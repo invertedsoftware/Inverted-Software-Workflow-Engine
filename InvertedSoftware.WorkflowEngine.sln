@@ -1,0 +1,93 @@
+
+Microsoft Visual Studio Solution File, Format Version 12.00
+# Visual Studio Version 17
+VisualStudioVersion = 17.0.0.0
+MinimumVisualStudioVersion = 10.0.40219.1
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine", "InvertedSoftware.ExecutionEngine\InvertedSoftware.WorkflowEngine.csproj", "{3ADF8F65-8AD2-4D8E-9D02-E05DD0BF338B}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.DataObjects", "InvertedSoftware.WorkflowEngine.DataObjects\InvertedSoftware.WorkflowEngine.DataObjects.csproj", "{C934A13C-7E8D-4D86-BF61-D9F35974FC6A}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Common", "InvertedSoftware.WorkflowEngine.Common\InvertedSoftware.WorkflowEngine.Common.csproj", "{837CE35C-5478-4652-B186-9AAD18C49D57}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Example", "InvertedSoftware.WorkflowEngine.Example\InvertedSoftware.WorkflowEngine.Example.csproj", "{63C71525-D701-420F-AB60-B2EC8241364D}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Queue.Abstractions", "InvertedSoftware.WorkflowEngine.Queue.Abstractions\InvertedSoftware.WorkflowEngine.Queue.Abstractions.csproj", "{A1A1A1A1-0001-0000-0000-000000000001}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Queue.Serialization", "InvertedSoftware.WorkflowEngine.Queue.Serialization\InvertedSoftware.WorkflowEngine.Queue.Serialization.csproj", "{A1A1A1A1-0002-0000-0000-000000000002}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Queue.InMemory", "InvertedSoftware.WorkflowEngine.Queue.InMemory\InvertedSoftware.WorkflowEngine.Queue.InMemory.csproj", "{A1A1A1A1-0003-0000-0000-000000000003}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Queue.RabbitMq", "InvertedSoftware.WorkflowEngine.Queue.RabbitMq\InvertedSoftware.WorkflowEngine.Queue.RabbitMq.csproj", "{A1A1A1A1-0004-0000-0000-000000000004}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Queue.Kafka", "InvertedSoftware.WorkflowEngine.Queue.Kafka\InvertedSoftware.WorkflowEngine.Queue.Kafka.csproj", "{A1A1A1A1-0005-0000-0000-000000000005}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Queue.AzureServiceBus", "InvertedSoftware.WorkflowEngine.Queue.AzureServiceBus\InvertedSoftware.WorkflowEngine.Queue.AzureServiceBus.csproj", "{A1A1A1A1-0006-0000-0000-000000000006}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Sample.Console", "InvertedSoftware.WorkflowEngine.Sample.Console\InvertedSoftware.WorkflowEngine.Sample.Console.csproj", "{A1A1A1A1-0007-0000-0000-000000000007}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "tests", "tests", "{A1A1A1A1-0008-0000-0000-000000000008}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "InvertedSoftware.WorkflowEngine.Tests.Unit", "tests\InvertedSoftware.WorkflowEngine.Tests.Unit\InvertedSoftware.WorkflowEngine.Tests.Unit.csproj", "{A1A1A1A1-0009-0000-0000-000000000009}"
+EndProject
+Global
+	GlobalSection(SolutionConfigurationPlatforms) = preSolution
+		Debug|Any CPU = Debug|Any CPU
+		Release|Any CPU = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(ProjectConfigurationPlatforms) = postSolution
+		{3ADF8F65-8AD2-4D8E-9D02-E05DD0BF338B}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3ADF8F65-8AD2-4D8E-9D02-E05DD0BF338B}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3ADF8F65-8AD2-4D8E-9D02-E05DD0BF338B}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3ADF8F65-8AD2-4D8E-9D02-E05DD0BF338B}.Release|Any CPU.Build.0 = Release|Any CPU
+		{C934A13C-7E8D-4D86-BF61-D9F35974FC6A}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{C934A13C-7E8D-4D86-BF61-D9F35974FC6A}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{C934A13C-7E8D-4D86-BF61-D9F35974FC6A}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{C934A13C-7E8D-4D86-BF61-D9F35974FC6A}.Release|Any CPU.Build.0 = Release|Any CPU
+		{837CE35C-5478-4652-B186-9AAD18C49D57}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{837CE35C-5478-4652-B186-9AAD18C49D57}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{837CE35C-5478-4652-B186-9AAD18C49D57}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{837CE35C-5478-4652-B186-9AAD18C49D57}.Release|Any CPU.Build.0 = Release|Any CPU
+		{63C71525-D701-420F-AB60-B2EC8241364D}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{63C71525-D701-420F-AB60-B2EC8241364D}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{63C71525-D701-420F-AB60-B2EC8241364D}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{63C71525-D701-420F-AB60-B2EC8241364D}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1A1A1A1-0001-0000-0000-000000000001}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1A1A1A1-0001-0000-0000-000000000001}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1A1A1A1-0001-0000-0000-000000000001}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1A1A1A1-0001-0000-0000-000000000001}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1A1A1A1-0002-0000-0000-000000000002}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1A1A1A1-0002-0000-0000-000000000002}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1A1A1A1-0002-0000-0000-000000000002}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1A1A1A1-0002-0000-0000-000000000002}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1A1A1A1-0003-0000-0000-000000000003}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1A1A1A1-0003-0000-0000-000000000003}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1A1A1A1-0003-0000-0000-000000000003}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1A1A1A1-0003-0000-0000-000000000003}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1A1A1A1-0004-0000-0000-000000000004}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1A1A1A1-0004-0000-0000-000000000004}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1A1A1A1-0004-0000-0000-000000000004}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1A1A1A1-0004-0000-0000-000000000004}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1A1A1A1-0005-0000-0000-000000000005}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1A1A1A1-0005-0000-0000-000000000005}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1A1A1A1-0005-0000-0000-000000000005}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1A1A1A1-0005-0000-0000-000000000005}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1A1A1A1-0006-0000-0000-000000000006}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1A1A1A1-0006-0000-0000-000000000006}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1A1A1A1-0006-0000-0000-000000000006}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1A1A1A1-0006-0000-0000-000000000006}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1A1A1A1-0007-0000-0000-000000000007}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1A1A1A1-0007-0000-0000-000000000007}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1A1A1A1-0007-0000-0000-000000000007}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1A1A1A1-0007-0000-0000-000000000007}.Release|Any CPU.Build.0 = Release|Any CPU
+		{A1A1A1A1-0009-0000-0000-000000000009}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{A1A1A1A1-0009-0000-0000-000000000009}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{A1A1A1A1-0009-0000-0000-000000000009}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{A1A1A1A1-0009-0000-0000-000000000009}.Release|Any CPU.Build.0 = Release|Any CPU
+	EndGlobalSection
+	GlobalSection(SolutionProperties) = preSolution
+		HideSolutionNode = FALSE
+	EndGlobalSection
+	GlobalSection(NestedProjects) = preSolution
+		{A1A1A1A1-0009-0000-0000-000000000009} = {A1A1A1A1-0008-0000-0000-000000000008}
+	EndGlobalSection
+EndGlobal
