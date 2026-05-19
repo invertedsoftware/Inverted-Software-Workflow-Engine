@@ -95,23 +95,57 @@ public static class FrameworkManager
 
         var body = host.Serializer.Serialize(message);
 
-        try
+        // v1 producer semantics: iterate declared tiers in FORWARD order (primary first),
+        // publish to the first that accepts. On QueueUnavailableException, fall over to the
+        // next tier. This preserves the resilience pattern where the producer never blocks
+        // on a single broker outage as long as at least one tier is reachable.
+        var tierCount = Math.Max(1, jobTemplate.ProcessorQueues.Count);
+        QueueProviderException? lastFailure = null;
+
+        for (var tier = 0; tier < tierCount; tier++)
         {
-            await host.QueueProvider.PublishAsync(
-                new LogicalQueue(jobName, LogicalQueueKind.Main),
-                body,
-                headers,
-                cancellationToken).ConfigureAwait(false);
+            try
+            {
+                await host.QueueProvider.PublishAsync(
+                    new LogicalQueue(jobName, LogicalQueueKind.Main, tier),
+                    body,
+                    headers,
+                    cancellationToken).ConfigureAwait(false);
+                if (tier > 0) activity?.SetTag("workflow.publish_tier", tier);
+                return; // success on this tier
+            }
+            catch (QueueUnavailableException e)
+            {
+                lastFailure = e;
+                if (tier + 1 < tierCount)
+                {
+                    Log.ProducerTierFailover(logger, e, jobName, tier, tier + 1);
+                    continue; // try the next tier
+                }
+                // No more tiers to try; fall through to terminal failure.
+                break;
+            }
+            catch (QueueProviderException e)
+            {
+                // Non-transient (e.g. missing mapping). Don't blindly retry on other tiers.
+                activity?.SetStatus(ActivityStatusCode.Error, e.Message);
+                WorkflowTelemetry.Errors.Add(1,
+                    new KeyValuePair<string, object?>("job", jobName),
+                    new KeyValuePair<string, object?>("kind", "provider"));
+                Log.PublishFailed(logger, e, jobName, absoluteJobId);
+                throw new WorkflowException("Error adding message to Queue", e);
+            }
         }
-        catch (QueueProviderException e)
-        {
-            activity?.SetStatus(ActivityStatusCode.Error, e.Message);
-            WorkflowTelemetry.Errors.Add(1,
-                new KeyValuePair<string, object?>("job", jobName),
-                new KeyValuePair<string, object?>("kind", "provider"));
-            Log.PublishFailed(logger, e, jobName, absoluteJobId);
-            throw new WorkflowException("Error adding message to Queue", e);
-        }
+
+        // All tiers exhausted.
+        activity?.SetStatus(ActivityStatusCode.Error, lastFailure?.Message ?? "All tiers unavailable");
+        WorkflowTelemetry.Errors.Add(1,
+            new KeyValuePair<string, object?>("job", jobName),
+            new KeyValuePair<string, object?>("kind", "provider"));
+        Log.PublishFailed(logger, lastFailure ?? new Exception("All tiers unavailable"), jobName, absoluteJobId);
+        throw new WorkflowException(
+            $"Error adding message to Queue: all {tierCount} tier(s) for job '{jobName}' are unreachable.",
+            lastFailure ?? new Exception("All tiers unavailable"));
     }
 
     /// <summary>

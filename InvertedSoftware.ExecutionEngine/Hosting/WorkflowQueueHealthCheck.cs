@@ -41,7 +41,9 @@ public sealed class WorkflowQueueHealthCheck : IHealthCheck
     {
         try
         {
-            var health = await _host.QueueProvider.CheckHealthAsync(_jobName, cancellationToken).ConfigureAwait(false);
+            // Health probe targets tier 0 (primary). Multi-tier deployments still see a
+            // healthy status as long as the primary is reachable.
+            var health = await _host.QueueProvider.CheckHealthAsync(_jobName, tier: 0, cancellationToken).ConfigureAwait(false);
             var data = new Dictionary<string, object>
             {
                 ["provider"] = _host.QueueProvider.Name,

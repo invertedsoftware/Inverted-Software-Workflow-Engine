@@ -16,4 +16,12 @@ public sealed class EngineOptions
 
     /// <summary>Path to the workflow XML config file.</summary>
     public string FrameworkConfigLocation { get; set; } = "Config/Workflow.xml";
+
+    /// <summary>
+    /// For multi-tier jobs (multiple <c>&lt;Queue&gt;</c> entries in <c>Workflow.xml</c>),
+    /// the consumer re-evaluates which tier to read from on this cadence so it
+    /// can switch back to the primary when it recovers. Ignored for single-tier jobs.
+    /// Default: 30 seconds. Minimum: 5 seconds.
+    /// </summary>
+    public int TierRebalanceIntervalSeconds { get; set; } = 30;
 }

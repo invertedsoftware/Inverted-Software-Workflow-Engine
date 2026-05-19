@@ -76,13 +76,13 @@ public sealed class AzureServiceBusQueueProvider : IQueueProvider
     private ServiceBusSender GetSender(string entity) =>
         _senders.GetOrAdd(entity, _client.CreateSender);
 
-    public async ValueTask<QueueHealth> CheckHealthAsync(string jobName, CancellationToken cancellationToken = default)
+    public async ValueTask<QueueHealth> CheckHealthAsync(string jobName, int tier = 0, CancellationToken cancellationToken = default)
     {
         try
         {
             async Task<(bool ok, long depth)> ProbeAsync(LogicalQueueKind kind)
             {
-                if (!_options.Mappings.TryGetValue(new LogicalQueue(jobName, kind).MappingKey, out var dest))
+                if (!_options.Mappings.TryGetValue(new LogicalQueue(jobName, kind, tier).MappingKey, out var dest))
                     return (false, 0);
                 try
                 {
@@ -167,9 +167,10 @@ public sealed class AzureServiceBusQueueProvider : IQueueProvider
     public async IAsyncEnumerable<IReceivedMessage> ConsumeAsync(
         string jobName,
         ConsumeOptions options,
+        int tier = 0,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var mainDest = ResolveDestination(new LogicalQueue(jobName, LogicalQueueKind.Main));
+        var mainDest = ResolveDestination(new LogicalQueue(jobName, LogicalQueueKind.Main, tier));
 
         // Auto-renew message locks for at least the consumer's ack budget plus a 20%
         // buffer, so long-running steps don't lose their lock mid-execution. Honour
@@ -203,7 +204,7 @@ public sealed class AzureServiceBusQueueProvider : IQueueProvider
         processor.ProcessMessageAsync += async args =>
         {
             var headers = MapHeaders(args.Message, mainDest.Entity);
-            var msg = new AsbReceivedMessage(args, new LogicalQueue(jobName, LogicalQueueKind.Main),
+            var msg = new AsbReceivedMessage(args, new LogicalQueue(jobName, LogicalQueueKind.Main, tier),
                 args.Message.Body.ToMemory(), headers, options.AutoAck);
             // Honour back-pressure: WriteAsync blocks if the bridge is full.
             await bridge.Writer.WriteAsync(msg, args.CancellationToken).ConfigureAwait(false);

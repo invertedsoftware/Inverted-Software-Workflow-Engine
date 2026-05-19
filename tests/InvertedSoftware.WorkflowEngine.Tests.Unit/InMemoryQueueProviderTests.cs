@@ -32,7 +32,7 @@ public class InMemoryQueueProviderTests
         await provider.PublishAsync(Main, serializer.Serialize(payload), headers);
 
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(2));
-        await foreach (var received in provider.ConsumeAsync("TestJob", new ConsumeOptions { Prefetch = 1 }, cts.Token))
+        await foreach (var received in provider.ConsumeAsync("TestJob", new ConsumeOptions { Prefetch = 1 }, cancellationToken: cts.Token))
         {
             var roundTripped = (ExampleMessage)received.DeserializeBody(serializer);
             Assert.Equal(42, roundTripped.JobID);

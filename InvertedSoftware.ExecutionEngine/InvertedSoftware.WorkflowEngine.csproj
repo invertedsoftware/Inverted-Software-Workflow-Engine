@@ -8,7 +8,7 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>2.1.1</Version>
+    <Version>2.2.0</Version>
     <Description>Cross-platform .NET workflow execution engine with pluggable queue providers (RabbitMQ, Kafka, Azure Service Bus).</Description>
     <Authors>Inverted Software</Authors>
     <Company>Inverted Software</Company>

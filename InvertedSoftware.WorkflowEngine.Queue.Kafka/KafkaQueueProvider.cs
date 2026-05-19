@@ -72,14 +72,14 @@ public sealed class KafkaQueueProvider : IQueueProvider
         return dest;
     }
 
-    public ValueTask<QueueHealth> CheckHealthAsync(string jobName, CancellationToken cancellationToken = default)
+    public ValueTask<QueueHealth> CheckHealthAsync(string jobName, int tier = 0, CancellationToken cancellationToken = default)
     {
         try
         {
             var metadata = _admin.Value.GetMetadata(TimeSpan.FromSeconds(5));
             bool Probe(LogicalQueueKind kind)
             {
-                if (!_options.Mappings.TryGetValue(new LogicalQueue(jobName, kind).MappingKey, out var dest))
+                if (!_options.Mappings.TryGetValue(new LogicalQueue(jobName, kind, tier).MappingKey, out var dest))
                     return false;
                 return metadata.Topics.Any(t => t.Topic == dest.Topic && t.Error.Code == ErrorCode.NoError);
             }
@@ -154,12 +154,13 @@ public sealed class KafkaQueueProvider : IQueueProvider
     public async IAsyncEnumerable<IReceivedMessage> ConsumeAsync(
         string jobName,
         ConsumeOptions options,
+        int tier = 0,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var mainDest = ResolveDestination(new LogicalQueue(jobName, LogicalQueueKind.Main));
+        var mainDest = ResolveDestination(new LogicalQueue(jobName, LogicalQueueKind.Main, tier));
         var consumerGroup = options.ConsumerGroup ?? mainDest.ConsumerGroup
             ?? throw new QueueProviderException(
-                $"Kafka Main destination for job '{jobName}' must specify a ConsumerGroup " +
+                $"Kafka Main destination for job '{jobName}' (tier {tier}) must specify a ConsumerGroup " +
                 "(in options.Mappings or via ConsumeOptions.ConsumerGroup).");
 
         var consumerConfig = new ConsumerConfig
@@ -207,7 +208,7 @@ public sealed class KafkaQueueProvider : IQueueProvider
                     var msg = new KafkaReceivedMessage(
                         tracker,
                         tpo,
-                        new LogicalQueue(jobName, LogicalQueueKind.Main),
+                        new LogicalQueue(jobName, LogicalQueueKind.Main, tier),
                         result.Message.Value,
                         headers,
                         options.AutoAck);

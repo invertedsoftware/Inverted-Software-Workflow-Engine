@@ -49,7 +49,7 @@ public class TracingTests : IDisposable
         await FrameworkManager.AddFrameworkJobAsync(Job, new ExampleMessage { JobID = 99 });
 
         // Drain one message to see the headers.
-        await foreach (var msg in queue.ConsumeAsync(Job, new ConsumeOptions { Prefetch = 1 }, new CancellationTokenSource(TimeSpan.FromSeconds(2)).Token))
+        await foreach (var msg in queue.ConsumeAsync(Job, new ConsumeOptions { Prefetch = 1 }, cancellationToken: new CancellationTokenSource(TimeSpan.FromSeconds(2)).Token))
         {
             Assert.True(msg.Headers.TryGetValue(Telemetry.TraceHeaders.TraceParent, out var tp),
                 "traceparent header was not injected on publish.");

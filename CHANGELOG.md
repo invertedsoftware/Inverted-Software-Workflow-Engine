@@ -1,5 +1,50 @@
 # Changelog
 
+## 2.2.0 — Restore v1 multi-tier queue failover
+
+Brings back the resilience feature from the original 2010 engine: when a job
+declares multiple `<Queue>` entries in `Workflow.xml`, producers iterate them
+forward (primary, then fallbacks) and consumers iterate in reverse (last
+tier first, preferring whichever has pending work).
+
+### Added
+
+* **`LogicalQueue.Tier`** field with mapping-key suffix convention. Tier 0
+  uses the bare `"JobName:Kind"` form so single-queue configs require no
+  changes; tier > 0 uses `"JobName#N:Kind"`.
+* **`IQueueProvider.ConsumeAsync(jobName, options, tier, ct)`** and
+  **`CheckHealthAsync(jobName, tier, ct)`** accept the tier parameter (default 0).
+* **`FrameworkManager.PublishAsync`** iterates declared tiers forward on
+  `QueueUnavailableException`, falling over to the next tier. Non-transient
+  exceptions (e.g. missing mapping) still surface immediately so config
+  problems aren't masked.
+* **`Processor` tier selection**: at startup and on each rebalance tick, picks
+  the highest-tier queue with pending messages; falls back to tier 0 (primary)
+  if no tier reports work. The currently-bound tier is logged at Information
+  (event ID 5000); secondary publishes (Error/Poison/Completed) route to the
+  same tier so a message's lifecycle stays colocated.
+* **`EngineOptions.TierRebalanceIntervalSeconds`** (default 30, minimum 5)
+  controls how often a multi-tier consumer re-evaluates tiers so it can switch
+  back to the primary when it recovers.
+* **`MultiTierFailoverTests`** (×3) — mapping-key format, producer forward
+  failover under primary outage, consumer binding to the highest-tier queue
+  with pending work.
+
+### Why
+
+This was a v1 feature I dropped in the .NET 10 rewrite, on the (wrong) theory
+that broker-connection-level failover replaced it. It doesn't: broker
+failover handles a downed RabbitMQ host; multi-queue failover handles a
+downed *logical destination* (e.g. a quota-exceeded queue, a region failure,
+a planned drain). They compose — a multi-tier deployment can use both.
+
+### Migration
+
+No code changes required for single-queue jobs (the common case). To use
+the feature, declare multiple `<Queue>` entries in `Workflow.xml` and add
+provider mappings keyed `"JobName#1:Main"`, `"JobName#1:Error"`, etc. for
+each non-primary tier.
+
 ## 2.1.1 — Bug sweep and architectural cleanup
 
 Targeted bug fixes and a few architectural improvements found during a deep

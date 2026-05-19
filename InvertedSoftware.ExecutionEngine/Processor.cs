@@ -25,6 +25,9 @@ public sealed class Processor : IJobReporter, IDisposable
 
     private ProcessorJob _processorJob = new();
     private IExecutor? _executor;
+    // Currently-selected tier for multi-queue consumers. Reads in error/complete handlers
+    // route secondary publishes to the same tier the message was consumed from.
+    private int _currentTier;
     // Two-stage cancellation:
     //   _stopConsumingCts fires first (StopFrameworkAsync, soft and hard) and unblocks
     //     the ConsumeAsync iterator so no new messages are picked up.
@@ -118,33 +121,100 @@ public sealed class Processor : IJobReporter, IDisposable
 
         var stopConsuming = _stopConsumingCts!.Token;
         var shutdown = _shutdownCts!.Token;
+        var rebalanceInterval = TimeSpan.FromSeconds(Math.Max(_host.Options.TierRebalanceIntervalSeconds, 5));
 
-        try
+        // Outer loop: pick a tier, consume from it until the rebalance timer or an
+        // error forces us to re-evaluate. Stops only when stopConsuming fires.
+        while (!stopConsuming.IsCancellationRequested)
         {
-            await foreach (var received in _host.QueueProvider
-                .ConsumeAsync(_processorJob.JobName, consumeOptions, stopConsuming)
-                .ConfigureAwait(false))
+            _currentTier = await SelectBestTierAsync(shutdown).ConfigureAwait(false);
+            if (TierCount > 1)
+                Log.ConsumingFromTier(_logger, _processorJob.JobName, _currentTier);
+
+            // The rebalance CTS fires after the interval, forcing the consume iterator
+            // to exit and the outer loop to re-select. This is how a multi-tier
+            // consumer notices when the primary recovers and switches back.
+            using var rebalanceCts = TierCount > 1
+                ? CancellationTokenSource.CreateLinkedTokenSource(stopConsuming)
+                : null;
+            rebalanceCts?.CancelAfter(rebalanceInterval);
+            var consumeToken = rebalanceCts?.Token ?? stopConsuming;
+
+            try
             {
-                // Bound the pool wait to `shutdown` (not stopConsuming) so a soft-stop
-                // doesn't drop a message we've already received from the broker; the
-                // soft-stop contract is "finish what you have". Hard-stop still bails.
-                await _pool.WaitAsync(shutdown).ConfigureAwait(false);
-                Interlocked.Increment(ref JobsRunning);
-                WorkflowTelemetry.JobsInFlight.Add(1,
-                    new KeyValuePair<string, object?>("job", _processorJob.JobName));
+                await foreach (var received in _host.QueueProvider
+                    .ConsumeAsync(_processorJob.JobName, consumeOptions, _currentTier, consumeToken)
+                    .ConfigureAwait(false))
+                {
+                    // Bound the pool wait to `shutdown` (not consumeToken) so a soft-stop
+                    // or rebalance doesn't drop a message we've already received.
+                    await _pool.WaitAsync(shutdown).ConfigureAwait(false);
+                    Interlocked.Increment(ref JobsRunning);
+                    WorkflowTelemetry.JobsInFlight.Add(1,
+                        new KeyValuePair<string, object?>("job", _processorJob.JobName));
 
-                _ = Task.Run(() => RunFrameworkJobAsync(received, shutdown), CancellationToken.None);
+                    var capturedTier = _currentTier;
+                    _ = Task.Run(() => RunFrameworkJobAsync(received, capturedTier, shutdown), CancellationToken.None);
+                }
             }
-        }
-        catch (OperationCanceledException) when (stopConsuming.IsCancellationRequested || shutdown.IsCancellationRequested)
-        {
-            // Graceful: StopFrameworkAsync was called (soft or hard).
+            catch (OperationCanceledException) when (stopConsuming.IsCancellationRequested || shutdown.IsCancellationRequested)
+            {
+                return; // graceful stop
+            }
+            catch (OperationCanceledException)
+            {
+                // Rebalance timer fired; loop to re-select the best tier.
+            }
+            catch (QueueUnavailableException e)
+            {
+                Log.ConsumerTierUnavailable(_logger, e, _processorJob.JobName, _currentTier);
+                await Task.Delay(TimeSpan.FromSeconds(2), stopConsuming).ConfigureAwait(false);
+            }
         }
     }
 
-    private async Task RunFrameworkJobAsync(IReceivedMessage received, CancellationToken outerToken)
+    /// <summary>
+    /// Picks the consumer tier per v1 semantics: iterate declared tiers in REVERSE
+    /// order; pick the first that's reachable and has pending work. If no tier
+    /// reports messages, fall back to tier 0 (primary) and wait for new arrivals.
+    ///
+    /// <para>For single-queue jobs (one or zero <c>&lt;Queue&gt;</c> entries) this
+    /// is a no-op that returns 0 without consulting the broker.</para>
+    /// </summary>
+    private async Task<int> SelectBestTierAsync(CancellationToken cancellationToken)
+    {
+        var count = TierCount;
+        if (count == 1) return 0;
+
+        for (var tier = count - 1; tier >= 0; tier--)
+        {
+            try
+            {
+                var health = await _host.QueueProvider
+                    .CheckHealthAsync(_processorJob.JobName, tier, cancellationToken)
+                    .ConfigureAwait(false);
+                if (health.MainAvailable && (health.ApproximateMainDepth ?? 0) > 0)
+                    return tier;
+            }
+            catch
+            {
+                // Tier unreachable; try the next one.
+            }
+        }
+        // No tier had messages; default to the primary so we sit on the queue
+        // most likely to receive new work.
+        return 0;
+    }
+
+    private int TierCount => Math.Max(1, _processorJob.ProcessorQueues.Count);
+
+    private async Task RunFrameworkJobAsync(IReceivedMessage received, int tier, CancellationToken outerToken)
     {
         var jobName = _processorJob.JobName;
+        // Stash the tier the consumer was on when this message was received, so
+        // the IJobReporter implementation routes secondary publishes to the same
+        // tier (Error+Poison+Completed colocate with where the work came from).
+        _currentTier = tier;
 
         // Start a consumer-side Activity linked to the producer's traceparent.
         using var activity = StartConsumeActivity(received, jobName);
@@ -282,7 +352,7 @@ public sealed class Processor : IJobReporter, IDisposable
         => ReportJobErrorAsync(exception, workflowStep, workflowMessage, currentJob, cancellationToken);
 
     Task IJobReporter.ReportJobCompleteAsync(IWorkflowMessage workflowMessage, ProcessorJob currentJob, CancellationToken cancellationToken)
-        => QueueOperationsHandler.HandleCompleteAsync(_host, currentJob.JobName, workflowMessage, cancellationToken);
+        => QueueOperationsHandler.HandleCompleteAsync(_host, currentJob.JobName, _currentTier, workflowMessage, cancellationToken);
 
     private Task ReportJobErrorAsync(Exception exception, ProcessorStep workflowStep, IWorkflowMessage workflowMessage, ProcessorJob currentJob, CancellationToken cancellationToken)
     {
@@ -298,7 +368,7 @@ public sealed class Processor : IJobReporter, IDisposable
             error.ExceptionMessage += $"|{inner.Message}";
             inner = inner.InnerException;
         }
-        return QueueOperationsHandler.HandleErrorAsync(_host, currentJob.JobName, workflowMessage, error, cancellationToken);
+        return QueueOperationsHandler.HandleErrorAsync(_host, currentJob.JobName, _currentTier, workflowMessage, error, cancellationToken);
     }
 
     private async Task PublishPoisonAsync(IReceivedMessage received, string reason, CancellationToken cancellationToken)
@@ -313,8 +383,9 @@ public sealed class Processor : IJobReporter, IDisposable
 
         try
         {
+            // Poison goes to the SAME tier the message came from.
             await _host.QueueProvider.PublishAsync(
-                new LogicalQueue(_processorJob.JobName, LogicalQueueKind.Poison),
+                new LogicalQueue(_processorJob.JobName, LogicalQueueKind.Poison, _currentTier),
                 received.Body,
                 headers,
                 cancellationToken).ConfigureAwait(false);

@@ -93,17 +93,18 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
         }
     }
 
-    private async Task DeclareTopologyIfNeededAsync(string jobName, CancellationToken cancellationToken)
+    private async Task DeclareTopologyIfNeededAsync(string jobName, int tier, CancellationToken cancellationToken)
     {
+        var topologyKey = tier == 0 ? jobName : $"{jobName}#{tier}";
         if (!_options.DeclareTopologyOnStartup) return;
-        if (!_declaredJobs.TryAdd(jobName, true)) return;
+        if (!_declaredJobs.TryAdd(topologyKey, true)) return;
 
         var conn = await EnsureConnectionAsync(cancellationToken).ConfigureAwait(false);
         await using var ch = await conn.CreateChannelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
 
         foreach (var kind in Enum.GetValues<LogicalQueueKind>())
         {
-            var key = new LogicalQueue(jobName, kind).MappingKey;
+            var key = new LogicalQueue(jobName, kind, tier).MappingKey;
             if (!_options.Mappings.TryGetValue(key, out var dest)) continue;
 
             if (!string.IsNullOrEmpty(dest.Exchange))
@@ -114,7 +115,7 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
         }
     }
 
-    public async ValueTask<QueueHealth> CheckHealthAsync(string jobName, CancellationToken cancellationToken = default)
+    public async ValueTask<QueueHealth> CheckHealthAsync(string jobName, int tier = 0, CancellationToken cancellationToken = default)
     {
         try
         {
@@ -123,7 +124,7 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
 
             async Task<(bool ok, long depth)> ProbeAsync(LogicalQueueKind kind)
             {
-                if (!_options.Mappings.TryGetValue(new LogicalQueue(jobName, kind).MappingKey, out var dest))
+                if (!_options.Mappings.TryGetValue(new LogicalQueue(jobName, kind, tier).MappingKey, out var dest))
                     return (false, 0);
                 try
                 {
@@ -157,7 +158,7 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
     {
         var dest = ResolveDestination(destination);
         var conn = await EnsureConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await DeclareTopologyIfNeededAsync(destination.JobName, cancellationToken).ConfigureAwait(false);
+        await DeclareTopologyIfNeededAsync(destination.JobName, destination.Tier, cancellationToken).ConfigureAwait(false);
 
         var props = BuildBasicProperties(headers);
 
@@ -194,7 +195,7 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
         {
             foreach (var m in messages)
             {
-                await DeclareTopologyIfNeededAsync(m.Destination.JobName, cancellationToken).ConfigureAwait(false);
+                await DeclareTopologyIfNeededAsync(m.Destination.JobName, m.Destination.Tier, cancellationToken).ConfigureAwait(false);
                 var dest = ResolveDestination(m.Destination);
                 var props = BuildBasicProperties(m.Headers);
 
@@ -218,11 +219,12 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
     public async IAsyncEnumerable<IReceivedMessage> ConsumeAsync(
         string jobName,
         ConsumeOptions options,
+        int tier = 0,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var mainDest = ResolveDestination(new LogicalQueue(jobName, LogicalQueueKind.Main));
+        var mainDest = ResolveDestination(new LogicalQueue(jobName, LogicalQueueKind.Main, tier));
         var conn = await EnsureConnectionAsync(cancellationToken).ConfigureAwait(false);
-        await DeclareTopologyIfNeededAsync(jobName, cancellationToken).ConfigureAwait(false);
+        await DeclareTopologyIfNeededAsync(jobName, tier, cancellationToken).ConfigureAwait(false);
 
         var ch = await conn.CreateChannelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
         try
@@ -236,7 +238,7 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
             consumer.ReceivedAsync += async (sender, ea) =>
             {
                 var headers = MapHeaders(ea.BasicProperties, ea.Exchange);
-                var msg = new RabbitMqReceivedMessage(ch, new LogicalQueue(jobName, LogicalQueueKind.Main), ea.Body, headers, ea.DeliveryTag, autoAck: options.AutoAck);
+                var msg = new RabbitMqReceivedMessage(ch, new LogicalQueue(jobName, LogicalQueueKind.Main, tier), ea.Body, headers, ea.DeliveryTag, autoAck: options.AutoAck);
                 await queue.Writer.WriteAsync(msg, cancellationToken).ConfigureAwait(false);
             };
 

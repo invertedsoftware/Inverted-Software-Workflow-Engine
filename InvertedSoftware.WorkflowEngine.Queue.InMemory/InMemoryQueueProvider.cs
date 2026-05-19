@@ -36,10 +36,10 @@ public sealed class InMemoryQueueProvider : IQueueProvider
                 SingleWriter = false,
             }));
 
-    public ValueTask<QueueHealth> CheckHealthAsync(string jobName, CancellationToken cancellationToken = default)
+    public ValueTask<QueueHealth> CheckHealthAsync(string jobName, int tier = 0, CancellationToken cancellationToken = default)
     {
         long Depth(LogicalQueueKind kind) =>
-            _channels.TryGetValue(new LogicalQueue(jobName, kind), out var ch) ? ch.Reader.Count : 0;
+            _channels.TryGetValue(new LogicalQueue(jobName, kind, tier), out var ch) ? ch.Reader.Count : 0;
 
         return new ValueTask<QueueHealth>(new QueueHealth(
             MainAvailable: true,
@@ -47,7 +47,7 @@ public sealed class InMemoryQueueProvider : IQueueProvider
             PoisonAvailable: true,
             CompletedAvailable: true,
             ApproximateMainDepth: Depth(LogicalQueueKind.Main),
-            Diagnostic: "InMemory"));
+            Diagnostic: tier == 0 ? "InMemory" : $"InMemory tier {tier}"));
     }
 
     public async ValueTask PublishAsync(
@@ -92,9 +92,10 @@ public sealed class InMemoryQueueProvider : IQueueProvider
     public async IAsyncEnumerable<IReceivedMessage> ConsumeAsync(
         string jobName,
         ConsumeOptions options,
+        int tier = 0,
         [EnumeratorCancellation] CancellationToken cancellationToken = default)
     {
-        var queue = new LogicalQueue(jobName, LogicalQueueKind.Main);
+        var queue = new LogicalQueue(jobName, LogicalQueueKind.Main, tier);
         var channel = GetOrCreate(queue);
 
         await foreach (var message in channel.Reader.ReadAllAsync(cancellationToken).ConfigureAwait(false))

@@ -77,4 +77,18 @@ internal static partial class Log
     [LoggerMessage(EventId = 4002, Level = LogLevel.Warning,
         Message = "Best-effort publish to {Destination} for job '{JobName}' failed; the engine continued. Investigate broker reachability.")]
     public static partial void SecondaryPublishFailed(ILogger logger, Exception exception, string jobName, string destination);
+
+    // ---- Multi-tier failover ------------------------------------------------
+
+    [LoggerMessage(EventId = 5000, Level = LogLevel.Information,
+        Message = "Consumer for job '{JobName}' bound to tier {Tier} (multi-queue failover)")]
+    public static partial void ConsumingFromTier(ILogger logger, string jobName, int tier);
+
+    [LoggerMessage(EventId = 5001, Level = LogLevel.Warning,
+        Message = "Consumer tier {Tier} for job '{JobName}' became unavailable; re-selecting")]
+    public static partial void ConsumerTierUnavailable(ILogger logger, Exception exception, string jobName, int tier);
+
+    [LoggerMessage(EventId = 5002, Level = LogLevel.Debug,
+        Message = "Producer for job '{JobName}' falling over from tier {FailedTier} to tier {NextTier}")]
+    public static partial void ProducerTierFailover(ILogger logger, Exception exception, string jobName, int failedTier, int nextTier);
 }

@@ -46,11 +46,11 @@ public class HealthCheckTests
     private sealed class FailingQueueProvider : Queue.IQueueProvider
     {
         public string Name => "Failing";
-        public ValueTask<Queue.QueueHealth> CheckHealthAsync(string jobName, CancellationToken cancellationToken = default)
+        public ValueTask<Queue.QueueHealth> CheckHealthAsync(string jobName, int tier = 0, CancellationToken cancellationToken = default)
             => new(new Queue.QueueHealth(false, false, false, false, null, "broker offline"));
         public ValueTask PublishAsync(Queue.LogicalQueue destination, ReadOnlyMemory<byte> body, Queue.MessageHeaders headers, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public ValueTask PublishBatchAsync(IReadOnlyList<Queue.OutgoingMessage> messages, CancellationToken cancellationToken = default) => throw new NotImplementedException();
-        public IAsyncEnumerable<Queue.IReceivedMessage> ConsumeAsync(string jobName, Queue.ConsumeOptions options, CancellationToken cancellationToken = default) => throw new NotImplementedException();
+        public IAsyncEnumerable<Queue.IReceivedMessage> ConsumeAsync(string jobName, Queue.ConsumeOptions options, int tier = 0, CancellationToken cancellationToken = default) => throw new NotImplementedException();
         public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     }
 }
