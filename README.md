@@ -8,6 +8,10 @@ backed by the message broker of your choice.
 
 - **Pluggable transport.** RabbitMQ, Apache Kafka, Azure Service Bus, or an
   in-memory broker for tests. Swap with one line of config.
+- **Multi-tier queue failover.** Declare multiple `<Queue>` entries per job
+  and the engine handles the resilience pattern automatically: producers fall
+  forward (primary, then backups) on outage; consumers iterate in reverse to
+  drain stale backlogs while the primary stays responsive.
 - **Production-grade out of the box.** OpenTelemetry tracing, OpenMetrics-compatible
   metrics, source-generated structured logging, health checks, graceful shutdown,
   optional idempotency store for at-least-once safety.
@@ -385,6 +389,81 @@ Each job has four logical queues:
 
 The provider maps these *logical* names to *physical* broker resources.
 The engine never sees the broker; it just says "publish to MyJob:Poison".
+
+### Multi-tier failover (resilience)
+
+A job can declare **multiple `<Queue>` entries** in `Workflow.xml`. Each
+entry becomes a *tier*. Tier 0 is the primary (the first declared); higher
+tiers are fallbacks.
+
+The engine handles the asymmetric resilience pattern automatically:
+
+- **Producers iterate FORWARD.** Try to publish to tier 0; on
+  `QueueUnavailableException`, fall over to tier 1; etc. The first tier
+  that accepts wins. When the primary recovers, the next publish goes
+  there again — no manual cutover.
+- **Consumers iterate REVERSE.** On startup (and every
+  `TierRebalanceIntervalSeconds`, default 30s), each consumer probes
+  tiers from highest to lowest via `CheckHealthAsync` and binds to the
+  first tier with pending messages. If no tier has work, it sits on
+  tier 0 waiting for new arrivals.
+- **Secondary publishes follow the consumer.** Error / Poison / Completed
+  messages route to the same tier the work was consumed from, so a
+  message's whole lifecycle stays colocated.
+
+Net effect: backup queues drain stale backlogs while the primary stays
+responsive to fresh writes. Originally a 2010 feature of the MSMQ-era
+engine; preserved verbatim through the .NET 10 rewrite.
+
+To use it, declare extra queue entries in `Workflow.xml`:
+
+```xml
+<Queues>
+  <Queue MessageQueue="MyJob.Main"
+         ErrorQueue="MyJob.Error"
+         PoisonQueue="MyJob.Poison"
+         CompletedQueue="MyJob.Completed"
+         MessageQueueType="Transactional"/>
+  <Queue MessageQueue="MyJob.Backup.Main"
+         ErrorQueue="MyJob.Backup.Error"
+         PoisonQueue="MyJob.Backup.Poison"
+         CompletedQueue="MyJob.Backup.Completed"
+         MessageQueueType="Transactional"/>
+</Queues>
+```
+
+…and add provider mappings keyed `JobName#N:Kind` for each non-primary tier
+(tier 0 uses the bare `JobName:Kind` form so existing single-queue configs
+need no changes):
+
+```csharp
+new RabbitMqOptions
+{
+    Mappings =
+    {
+        // Tier 0 (primary)
+        ["MyJob:Main"]      = new RabbitMqDestination("wf.myjob", "main",      "wf.myjob.main"),
+        ["MyJob:Error"]     = new RabbitMqDestination("wf.myjob", "error",     "wf.myjob.error"),
+        ["MyJob:Poison"]    = new RabbitMqDestination("wf.myjob", "poison",    "wf.myjob.poison"),
+        ["MyJob:Completed"] = new RabbitMqDestination("wf.myjob", "completed", "wf.myjob.completed"),
+
+        // Tier 1 (backup) — same shape, different broker resources
+        ["MyJob#1:Main"]      = new RabbitMqDestination("wf.myjob.backup", "main",      "wf.myjob.backup.main"),
+        ["MyJob#1:Error"]     = new RabbitMqDestination("wf.myjob.backup", "error",     "wf.myjob.backup.error"),
+        ["MyJob#1:Poison"]    = new RabbitMqDestination("wf.myjob.backup", "poison",    "wf.myjob.backup.poison"),
+        ["MyJob#1:Completed"] = new RabbitMqDestination("wf.myjob.backup", "completed", "wf.myjob.backup.completed"),
+    },
+}
+```
+
+Single-queue jobs (one or zero `<Queue>` entries) skip all of this and use
+the bare `LogicalQueue` mapping keys exactly as before. You only opt in by
+declaring more than one queue entry.
+
+Multi-tier queue failover **composes with broker-level connection failover**
+— a RabbitMQ provider can have both multiple `ConnectionStrings` (handles
+a downed broker host) and multiple tiers (handles a downed *destination*
+like a quota-exceeded queue or a planned drain).
 
 ### `MessageQueueType`
 
