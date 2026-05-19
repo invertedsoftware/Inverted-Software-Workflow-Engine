@@ -64,6 +64,18 @@ internal static partial class Log
         Message = "Step '{StepName}' of job '{JobName}' jobId={JobId} skipped (idempotency: already completed)")]
     public static partial void StepSkippedIdempotent(ILogger logger, string jobName, int jobId, string stepName);
 
+    [LoggerMessage(EventId = 3004, Level = LogLevel.Error,
+        Message = "Idempotency store ReleaseAsync failed for step '{StepName}' of job '{JobName}' jobId={JobId}; the step's claim may persist until TTL. Original step failure is being propagated.")]
+    public static partial void IdempotencyReleaseFailed(ILogger logger, Exception exception, string jobName, int jobId, string stepName);
+
+    [LoggerMessage(EventId = 3005, Level = LogLevel.Error,
+        Message = "Idempotency store TryClaimAsync failed for step '{StepName}' of job '{JobName}' jobId={JobId}; this is an infrastructure failure, NOT a step failure. The message will be requeued; verify the idempotency store is reachable.")]
+    public static partial void IdempotencyClaimFailed(ILogger logger, Exception exception, string jobName, int jobId, string stepName);
+
+    [LoggerMessage(EventId = 3006, Level = LogLevel.Error,
+        Message = "Fire-and-forget step '{StepName}' of job '{JobName}' faulted with an unobserved exception. The job has already moved on; this failure is being surfaced only in logs.")]
+    public static partial void FireAndForgetStepFaulted(ILogger logger, Exception exception, string jobName, string stepName);
+
     // ---- Publish ------------------------------------------------------------
 
     [LoggerMessage(EventId = 4000, Level = LogLevel.Debug,

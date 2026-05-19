@@ -28,9 +28,25 @@ public interface IIdempotencyStore
 
     /// <summary>
     /// Mark a previously-claimed step as completed. Called by the engine after
-    /// successful step execution.
+    /// successful step execution. Future <see cref="TryClaimAsync"/> calls for the
+    /// same claim MUST return <c>false</c>.
     /// </summary>
     ValueTask MarkCompletedAsync(IdempotencyClaim claim, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Release a previously-claimed step that did NOT complete successfully. Called by
+    /// the engine when a step exhausts its retries or is otherwise abandoned without
+    /// a successful run. After release, <see cref="TryClaimAsync"/> for the same claim
+    /// MUST return <c>true</c> again so the next delivery / job-level retry can re-attempt.
+    ///
+    /// <para>The default implementation is a no-op: implementations that don't track
+    /// in-flight claims separately from completed ones (e.g. the default <see cref="NoOpIdempotencyStore"/>)
+    /// don't need to do anything here. Implementations with a TTL on claims (e.g. Redis
+    /// <c>SET NX EX</c>) may also no-op and let the TTL expire — but releasing eagerly
+    /// makes job-level retry feel snappier.</para>
+    /// </summary>
+    ValueTask ReleaseAsync(IdempotencyClaim claim, CancellationToken cancellationToken = default)
+        => ValueTask.CompletedTask;
 }
 
 /// <summary>Identifies a single step occurrence within a job.</summary>

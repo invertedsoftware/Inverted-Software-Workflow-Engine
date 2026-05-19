@@ -43,4 +43,13 @@ public sealed class InMemoryIdempotencyStore : IIdempotencyStore
         _claimed.TryRemove(claim.Key, out _);
         return ValueTask.CompletedTask;
     }
+
+    public ValueTask ReleaseAsync(IdempotencyClaim claim, CancellationToken cancellationToken = default)
+    {
+        // Release WITHOUT marking completed — a future TryClaimAsync for the same
+        // (job, step, jobId) tuple should return true again so retry / redelivery
+        // can re-attempt the step.
+        _claimed.TryRemove(claim.Key, out _);
+        return ValueTask.CompletedTask;
+    }
 }

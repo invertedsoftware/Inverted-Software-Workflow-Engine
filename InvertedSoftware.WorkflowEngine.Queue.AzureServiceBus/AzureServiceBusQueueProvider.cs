@@ -241,9 +241,13 @@ public sealed class AzureServiceBusQueueProvider : IQueueProvider
     {
         if (_disposed) return;
         _disposed = true;
+        // Wrap each disposal: a throw on one sender or the client must not skip cleanup
+        // of the others. Shutdown is a "best-effort, free everything" path.
         foreach (var s in _senders.Values)
-            await s.DisposeAsync().ConfigureAwait(false);
-        await _client.DisposeAsync().ConfigureAwait(false);
+        {
+            try { await s.DisposeAsync().ConfigureAwait(false); } catch { }
+        }
+        try { await _client.DisposeAsync().ConfigureAwait(false); } catch { }
     }
 
     private static ServiceBusMessage BuildMessage(ReadOnlyMemory<byte> body, MessageHeaders headers)

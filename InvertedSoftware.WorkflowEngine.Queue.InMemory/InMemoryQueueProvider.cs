@@ -108,11 +108,13 @@ public sealed class InMemoryQueueProvider : IQueueProvider
             }
             else
             {
-                message.OnNackRequeue = m =>
+                message.OnNackRequeue = async (m, ct) =>
                 {
                     // Best-effort: requeue to head not possible with Channel; append to tail.
+                    // Use WriteAsync (not TryWrite) so we wait for capacity instead of
+                    // silently dropping the message when the bounded channel is full.
                     var ch = GetOrCreate(m.Source);
-                    ch.Writer.TryWrite(m);
+                    await ch.Writer.WriteAsync(m, ct).ConfigureAwait(false);
                 };
                 yield return message;
             }
@@ -170,7 +172,7 @@ internal sealed class InMemoryReceivedMessage : IReceivedMessage
     public object DeliveryTag { get; }
 
     /// <summary>Provider sets this so Nack-with-requeue can re-enqueue.</summary>
-    public Action<InMemoryReceivedMessage>? OnNackRequeue { get; set; }
+    public Func<InMemoryReceivedMessage, CancellationToken, ValueTask>? OnNackRequeue { get; set; }
 
     public void Reset() => _resolved = 0;
 
@@ -180,16 +182,15 @@ internal sealed class InMemoryReceivedMessage : IReceivedMessage
         return ValueTask.CompletedTask;
     }
 
-    public ValueTask NackAsync(bool requeue, CancellationToken cancellationToken = default)
+    public async ValueTask NackAsync(bool requeue, CancellationToken cancellationToken = default)
     {
         if (Interlocked.Exchange(ref _resolved, 1) == 1)
-            return ValueTask.CompletedTask;
+            return;
         if (requeue && OnNackRequeue is not null)
         {
             Headers.DeliveryAttempt++;
-            OnNackRequeue(this);
+            await OnNackRequeue(this, cancellationToken).ConfigureAwait(false);
         }
-        return ValueTask.CompletedTask;
     }
 
     public object DeserializeBody(IMessageSerializer serializer)

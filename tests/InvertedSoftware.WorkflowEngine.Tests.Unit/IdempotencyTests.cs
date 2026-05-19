@@ -74,6 +74,57 @@ public class IdempotencyTests
         Assert.Equal(3, counter.ExecutionCount);
     }
 
+    [Fact]
+    public async Task InMemoryStore_Release_Allows_Reclaim()
+    {
+        // Direct unit test for the store: a claim that's released (not marked completed)
+        // must be re-claimable.
+        var store = new InMemoryIdempotencyStore();
+        var claim = new IdempotencyClaim(Job, "Step", 1);
+
+        Assert.True(await store.TryClaimAsync(claim));
+        await store.ReleaseAsync(claim);
+        Assert.True(await store.TryClaimAsync(claim));    // can claim again — not completed
+        await store.MarkCompletedAsync(claim);
+        Assert.False(await store.TryClaimAsync(claim));   // now completed — blocked
+    }
+
+    [Fact]
+    public async Task Failed_Step_Releases_Claim_So_Redelivery_Retries()
+    {
+        // Regression test for Bug 50: a step that throws on its first attempt must
+        // release (not mark-completed) its idempotency claim, so a redelivery of the
+        // same message can re-attempt the step. Otherwise consumer-crash recovery and
+        // OnError=RetryJob silently turn step failures into "success".
+        var step = new FailOnceStep();
+        var store = new InMemoryIdempotencyStore();
+
+        using var tmp = new TestWorkflowXml(Job, ("FailOnce", typeof(FailOnceStep).FullName!));
+        var stepFactory = new TypeNameStepFactory().Register<FailOnceStep>(typeof(FailOnceStep).FullName!, () => step);
+
+        await using var queue = new InMemoryQueueProvider();
+        var host = new WorkflowEngineHost(queue, new JsonMessageSerializer(), stepFactory,
+            new EngineOptions { FrameworkConfigLocation = tmp.Path }, idempotencyStore: store);
+
+        using var processor = host.CreateProcessor();
+        var consumerTask = Task.Run(() => processor.StartFrameworkAsync(Job));
+
+        // First delivery — step throws, claim should be RELEASED.
+        await FrameworkManager.AddFrameworkJobAsync(Job, new ExampleMessage { JobID = 99 });
+        await WaitForAsync(() => step.AttemptCount >= 1, TimeSpan.FromSeconds(3));
+        // Let the failure path complete (release the claim, ack/error-publish).
+        await Task.Delay(200);
+
+        // Redelivery — step should be re-attempted (and now succeeds).
+        await FrameworkManager.AddFrameworkJobAsync(Job, new ExampleMessage { JobID = 99 });
+        await WaitForAsync(() => step.AttemptCount >= 2, TimeSpan.FromSeconds(3));
+
+        await processor.StopFrameworkAsync(isSoftExit: true);
+        try { await consumerTask; } catch { }
+
+        Assert.Equal(2, step.AttemptCount);
+    }
+
     private static async Task WaitForAsync(Func<bool> cond, TimeSpan timeout)
     {
         var deadline = DateTime.UtcNow + timeout;
@@ -91,6 +142,18 @@ public class IdempotencyTests
         public int ExecutionCount => Volatile.Read(ref _count);
         public void RunStep(IWorkflowMessage message, CancellationToken cancellationToken) =>
             Interlocked.Increment(ref _count);
+        public void Dispose() { }
+    }
+
+    public sealed class FailOnceStep : IStep
+    {
+        private int _attempts;
+        public int AttemptCount => Volatile.Read(ref _attempts);
+        public void RunStep(IWorkflowMessage message, CancellationToken cancellationToken)
+        {
+            var attempt = Interlocked.Increment(ref _attempts);
+            if (attempt == 1) throw new InvalidOperationException("transient failure");
+        }
         public void Dispose() { }
     }
 }

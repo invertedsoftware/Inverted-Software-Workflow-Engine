@@ -27,10 +27,19 @@ public sealed class KafkaQueueProvider : IQueueProvider
 {
     private readonly KafkaOptions _options;
     private readonly ILogger<KafkaQueueProvider> _logger;
+    // Two producers, decoupled. Kafka's transactional-id setting puts the entire
+    // producer into transactional mode where every Produce must be wrapped in
+    // BeginTransaction/CommitTransaction — sharing one producer for PublishAsync
+    // (single-message) and PublishBatchAsync (transactional batch) would either
+    // hang non-tx publishes or mix concurrent calls into the same transaction.
+    //   _producer        — idempotent, NOT transactional. Used by PublishAsync.
+    //   _txProducer      — transactional. Created lazily when PublishBatchAsync first
+    //                      runs AND options.TransactionalId is set. Single-writer.
     private readonly IProducer<string?, byte[]> _producer;
-    private readonly Lazy<IAdminClient> _admin;
-    private readonly object _txLock = new();
+    private IProducer<string?, byte[]>? _txProducer;
+    private readonly SemaphoreSlim _txLock = new(1, 1);
     private bool _txInitialised;
+    private readonly Lazy<IAdminClient> _admin;
     private bool _disposed;
 
     public KafkaQueueProvider(KafkaOptions options, ILogger<KafkaQueueProvider>? logger = null)
@@ -38,12 +47,14 @@ public sealed class KafkaQueueProvider : IQueueProvider
         _options = options ?? throw new ArgumentNullException(nameof(options));
         _logger = logger ?? NullLogger<KafkaQueueProvider>.Instance;
 
+        // PublishAsync producer: idempotent (acks=all + enable.idempotence) for at-least-once
+        // with no producer-side duplicates within a session — but NOT transactional, so
+        // concurrent ProduceAsync calls are independent.
         var producerConfig = new ProducerConfig
         {
             BootstrapServers = _options.BootstrapServers,
             Acks = ParseAcks(_options.Acks),
             EnableIdempotence = _options.EnableIdempotence,
-            TransactionalId = _options.TransactionalId,
             SecurityProtocol = ParseSecurity(_options.SecurityProtocol),
             SaslMechanism = _options.SaslMechanism is null ? null : Enum.Parse<SaslMechanism>(_options.SaslMechanism, ignoreCase: true),
             SaslUsername = _options.SaslUsername,
@@ -59,6 +70,28 @@ public sealed class KafkaQueueProvider : IQueueProvider
             SaslUsername = producerConfig.SaslUsername,
             SaslPassword = producerConfig.SaslPassword,
         }).Build());
+    }
+
+    private IProducer<string?, byte[]> GetOrCreateTxProducer()
+    {
+        if (_txProducer is not null) return _txProducer;
+        if (string.IsNullOrEmpty(_options.TransactionalId))
+            throw new QueueProviderException(
+                "PublishBatchAsync requested an atomic transaction but KafkaOptions.TransactionalId is not set.");
+
+        var cfg = new ProducerConfig
+        {
+            BootstrapServers = _options.BootstrapServers,
+            Acks = ParseAcks(_options.Acks),
+            EnableIdempotence = true, // transactional implies idempotent
+            TransactionalId = _options.TransactionalId,
+            SecurityProtocol = ParseSecurity(_options.SecurityProtocol),
+            SaslMechanism = _options.SaslMechanism is null ? null : Enum.Parse<SaslMechanism>(_options.SaslMechanism, ignoreCase: true),
+            SaslUsername = _options.SaslUsername,
+            SaslPassword = _options.SaslPassword,
+        };
+        _txProducer = new ProducerBuilder<string?, byte[]>(cfg).Build();
+        return _txProducer;
     }
 
     public string Name => "Kafka";
@@ -131,24 +164,34 @@ public sealed class KafkaQueueProvider : IQueueProvider
             return;
         }
 
-        EnsureTxInitialised();
-
+        // Serialize batch publishes — Kafka's transactional producer is single-writer
+        // (only one open transaction at a time per producer instance).
+        await _txLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            _producer.BeginTransaction();
-            foreach (var m in messages)
+            var producer = GetOrCreateTxProducer();
+            EnsureTxInitialised(producer);
+
+            try
             {
-                var dest = ResolveDestination(m.Destination);
-                _producer.Produce(dest.Topic, BuildMessage(m.Body, m.Headers));
+                producer.BeginTransaction();
+                foreach (var m in messages)
+                {
+                    var dest = ResolveDestination(m.Destination);
+                    producer.Produce(dest.Topic, BuildMessage(m.Body, m.Headers));
+                }
+                producer.CommitTransaction();
             }
-            _producer.CommitTransaction();
+            catch
+            {
+                try { producer.AbortTransaction(); } catch { /* nested failure */ }
+                throw;
+            }
         }
-        catch
+        finally
         {
-            try { _producer.AbortTransaction(); } catch { /* nested failure */ }
-            throw;
+            _txLock.Release();
         }
-        await Task.CompletedTask.ConfigureAwait(false);
     }
 
     public async IAsyncEnumerable<IReceivedMessage> ConsumeAsync(
@@ -240,21 +283,29 @@ public sealed class KafkaQueueProvider : IQueueProvider
     {
         if (_disposed) return ValueTask.CompletedTask;
         _disposed = true;
+        // Each step is wrapped: a throw on one underlying client must not skip cleanup
+        // of the others. Shutdown is a "best-effort, free everything" path.
         try { _producer.Flush(TimeSpan.FromSeconds(5)); } catch { }
-        _producer.Dispose();
-        if (_admin.IsValueCreated) _admin.Value.Dispose();
+        try { _producer.Dispose(); } catch { }
+        if (_txProducer is not null)
+        {
+            try { _txProducer.Flush(TimeSpan.FromSeconds(5)); } catch { }
+            try { _txProducer.Dispose(); } catch { }
+        }
+        if (_admin.IsValueCreated)
+        {
+            try { _admin.Value.Dispose(); } catch { }
+        }
+        try { _txLock.Dispose(); } catch { }
         return ValueTask.CompletedTask;
     }
 
-    private void EnsureTxInitialised()
+    private void EnsureTxInitialised(IProducer<string?, byte[]> txProducer)
     {
+        // Called under _txLock so plain non-volatile read is safe.
         if (_txInitialised) return;
-        lock (_txLock)
-        {
-            if (_txInitialised) return;
-            _producer.InitTransactions(TimeSpan.FromSeconds(30));
-            _txInitialised = true;
-        }
+        txProducer.InitTransactions(TimeSpan.FromSeconds(30));
+        _txInitialised = true;
     }
 
     private static Message<string?, byte[]> BuildMessage(ReadOnlyMemory<byte> body, MessageHeaders headers)

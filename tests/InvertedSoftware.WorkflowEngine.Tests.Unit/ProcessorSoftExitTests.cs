@@ -47,6 +47,41 @@ public class ProcessorSoftExitTests
     }
 
     [Fact]
+    public async Task External_Cancellation_Soft_Stops_Without_Cancelling_InFlight_Job()
+    {
+        // Regression for Bug D-2: when the BackgroundService passes stoppingToken into
+        // StartFrameworkAsync, the old behavior was to fire BOTH the stop-consuming AND
+        // the shutdown CTS — silently turning softExitOnShutdown=true into hard-exit.
+        // The contract is: external cancellation = soft-stop. In-flight jobs continue.
+        var slowStep = new SlowStep(TimeSpan.FromMilliseconds(800));
+        using var tmp = new TempWorkflowXml(Job);
+
+        var stepFactory = new TypeNameStepFactory().Register<SlowStep>(typeof(SlowStep).FullName!, () => slowStep);
+        await using var queue = new InMemoryQueueProvider();
+        var host = new WorkflowEngineHost(queue, new JsonMessageSerializer(), stepFactory,
+            new EngineOptions { FrameworkMaxThreads = 4, FrameworkConfigLocation = tmp.Path });
+
+        using var processor = host.CreateProcessor();
+        using var externalCts = new CancellationTokenSource();
+        var consumerTask = Task.Run(() => processor.StartFrameworkAsync(Job, externalCts.Token));
+
+        await FrameworkManager.AddFrameworkJobAsync(Job, new ExampleMessage { JobID = 1 });
+        await WaitForAsync(() => processor.JobsRunning == 1, TimeSpan.FromSeconds(2));
+
+        // Cancel the external token mid-flight. With soft-stop semantics the step
+        // should still get to finish.
+        externalCts.Cancel();
+
+        // Wait for the consumer task to wind down. With the old hard-stop behavior the
+        // step would have been cancelled and CompletedNormally would stay false.
+        await processor.StopFrameworkAsync(isSoftExit: true);
+        try { await consumerTask; } catch (OperationCanceledException) { /* fine */ }
+
+        Assert.True(slowStep.CompletedNormally,
+            "External cancellation should soft-stop: the in-flight step must run to completion.");
+    }
+
+    [Fact]
     public async Task HardExit_Cancels_InFlight_Job()
     {
         var slowStep = new SlowStep(TimeSpan.FromSeconds(10));

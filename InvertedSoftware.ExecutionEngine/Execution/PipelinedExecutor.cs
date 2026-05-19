@@ -3,7 +3,9 @@
 using System.Collections.Concurrent;
 using System.Threading.Tasks.Dataflow;
 using InvertedSoftware.WorkflowEngine.DataObjects;
+using InvertedSoftware.WorkflowEngine.Diagnostics;
 using InvertedSoftware.WorkflowEngine.Messages;
+using Microsoft.Extensions.Logging;
 
 namespace InvertedSoftware.WorkflowEngine.Execution;
 
@@ -19,6 +21,7 @@ internal sealed class PipelinedExecutor : IExecutor
     private readonly WorkflowEngineHost _host;
     private readonly IJobReporter _reporter;
     private readonly StepExecutor _stepExecutor;
+    private readonly ILogger<PipelinedExecutor> _logger;
     private readonly List<TransformBlock<PipelineInfo, PipelineInfo>> _workerBlocks = new();
     private readonly ConcurrentDictionary<Guid, TaskCompletionSource<PipelineInfo>> _pending = new();
 
@@ -38,6 +41,7 @@ internal sealed class PipelinedExecutor : IExecutor
         _host = host ?? throw new ArgumentNullException(nameof(host));
         _reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
         _stepExecutor = new StepExecutor(host, reporter);
+        _logger = host.CreateLogger<PipelinedExecutor>();
     }
 
     private void LoadPipeline()
@@ -90,9 +94,25 @@ internal sealed class PipelinedExecutor : IExecutor
             }
             else
             {
-                _ = Task.Run(() => _stepExecutor.RunFrameworkStepAsync(
-                    info.WorkflowMessage, info.RetryStepTimes, workflowStep, info.CurrentJob, info.IsCheckDepends, info.CancellationToken),
-                    info.CancellationToken);
+                // Wrap to surface unobserved infrastructure exceptions in logs (see
+                // SequentialExecutor for rationale).
+                var capturedStep = workflowStep;
+                var capturedInfo = info;
+                _ = Task.Run(async () =>
+                {
+                    try
+                    {
+                        await _stepExecutor.RunFrameworkStepAsync(
+                            capturedInfo.WorkflowMessage, capturedInfo.RetryStepTimes, capturedStep,
+                            capturedInfo.CurrentJob, capturedInfo.IsCheckDepends, capturedInfo.CancellationToken)
+                            .ConfigureAwait(false);
+                    }
+                    catch (OperationCanceledException) when (capturedInfo.CancellationToken.IsCancellationRequested) { /* expected */ }
+                    catch (Exception e)
+                    {
+                        Log.FireAndForgetStepFaulted(_logger, e, capturedInfo.CurrentJob.JobName, capturedStep.StepName);
+                    }
+                }, info.CancellationToken);
             }
 
             info.CurrentStepNumber++;

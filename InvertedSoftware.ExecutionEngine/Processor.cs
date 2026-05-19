@@ -56,6 +56,13 @@ public sealed class Processor : IJobReporter, IDisposable
     /// Start consuming the named job's main queue and processing messages.
     /// Returns when the framework stops (after <see cref="StopFrameworkAsync"/> is invoked
     /// or the supplied <paramref name="cancellationToken"/> fires).
+    ///
+    /// <para><b>Cancellation semantics:</b> firing <paramref name="cancellationToken"/>
+    /// is treated as a SOFT-stop signal — the consume loop stops accepting new
+    /// messages, but in-flight jobs continue to natural completion. This matches
+    /// the contract callers usually expect from a host-shutdown token (graceful drain,
+    /// not abort). For an immediate, in-flight-cancelling hard stop, invoke
+    /// <see cref="StopFrameworkAsync"/> with <c>isSoftExit: false</c>.</para>
     /// </summary>
     public async Task StartFrameworkAsync(string jobName, CancellationToken cancellationToken = default)
     {
@@ -69,8 +76,11 @@ public sealed class Processor : IJobReporter, IDisposable
             : new SequentialExecutor(_host, this);
         _executor.ProcessorJob = _processorJob;
 
+        // External cancellation is a SOFT-stop: it cancels stopConsuming so the iterator
+        // exits, but does NOT cancel _shutdownCts — in-flight jobs keep running to
+        // completion. Hard-stop must go through StopFrameworkAsync(isSoftExit:false).
         _stopConsumingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        _shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _shutdownCts = new CancellationTokenSource();
         FrameworkOn = true;
         Log.FrameworkStarted(_logger, jobName);
 
@@ -88,7 +98,15 @@ public sealed class Processor : IJobReporter, IDisposable
     /// <summary>
     /// Stop the consumer. When <paramref name="isSoftExit"/> is <c>true</c>, in-flight
     /// jobs continue running to natural completion and ack normally; this call awaits
-    /// them. When <c>false</c>, in-flight jobs see a cancelled token and nack-requeue.
+    /// them, honouring <paramref name="cancellationToken"/> as a drain deadline. When
+    /// <c>false</c>, in-flight jobs see a cancelled token and nack-requeue; the call
+    /// returns immediately.
+    ///
+    /// <para>If the soft-drain is interrupted by <paramref name="cancellationToken"/>
+    /// (e.g. the host's shutdown timeout fires), this method returns rather than
+    /// throwing — the caller can decide to escalate to hard-stop. In-flight jobs that
+    /// haven't finished by then continue running until they complete on their own;
+    /// they are NOT cancelled by this method.</para>
     /// </summary>
     public async Task StopFrameworkAsync(bool isSoftExit, CancellationToken cancellationToken = default)
     {
@@ -102,7 +120,19 @@ public sealed class Processor : IJobReporter, IDisposable
         }
 
         while (Volatile.Read(ref JobsRunning) > 0)
-            await Task.Delay(200, cancellationToken).ConfigureAwait(false);
+        {
+            try
+            {
+                await Task.Delay(200, cancellationToken).ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                // Drain deadline reached — return without throwing. The caller chose
+                // soft-exit, so we don't escalate; they can call StopFrameworkAsync(false)
+                // if they want to force in-flight cancellation.
+                return;
+            }
+        }
     }
 
     /// <summary>Synchronous shim — prefer <see cref="StopFrameworkAsync"/>.</summary>

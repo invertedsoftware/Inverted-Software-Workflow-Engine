@@ -1,7 +1,9 @@
 // Copyright (c) Inverted Software. All rights reserved.
 
 using InvertedSoftware.WorkflowEngine.DataObjects;
+using InvertedSoftware.WorkflowEngine.Diagnostics;
 using InvertedSoftware.WorkflowEngine.Messages;
+using Microsoft.Extensions.Logging;
 
 namespace InvertedSoftware.WorkflowEngine.Execution;
 
@@ -13,6 +15,7 @@ internal sealed class SequentialExecutor : IExecutor
 {
     private readonly StepExecutor _stepExecutor;
     private readonly IJobReporter _reporter;
+    private readonly ILogger<SequentialExecutor> _logger;
 
     public ProcessorJob ProcessorJob { get; set; } = new();
 
@@ -20,6 +23,7 @@ internal sealed class SequentialExecutor : IExecutor
     {
         _stepExecutor = new StepExecutor(host, reporter);
         _reporter = reporter;
+        _logger = host.CreateLogger<SequentialExecutor>();
     }
 
     public async Task RunFrameworkJobAsync(
@@ -44,9 +48,26 @@ internal sealed class SequentialExecutor : IExecutor
                 }
                 else // FireAndForget
                 {
-                    _ = Task.Run(() => _stepExecutor.RunFrameworkStepAsync(
-                        workflowMessage, retryStepTimes: 0, workflowStep, currentJob, isCheckDepends, cancellationToken),
-                        cancellationToken);
+                    // Wrap to surface unobserved infrastructure exceptions in logs. The
+                    // StepExecutor catches user-step exceptions and routes them through
+                    // _reporter, but failures that fall outside its try-block (e.g. an
+                    // idempotency store outage, a step-factory throw) would otherwise
+                    // disappear into the void.
+                    var capturedStep = workflowStep;
+                    _ = Task.Run(async () =>
+                    {
+                        try
+                        {
+                            await _stepExecutor.RunFrameworkStepAsync(
+                                workflowMessage, retryStepTimes: 0, capturedStep, currentJob, isCheckDepends, cancellationToken)
+                                .ConfigureAwait(false);
+                        }
+                        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { /* expected */ }
+                        catch (Exception e)
+                        {
+                            Log.FireAndForgetStepFaulted(_logger, e, currentJob.JobName, capturedStep.StepName);
+                        }
+                    }, cancellationToken);
                 }
             }
             catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)

@@ -56,11 +56,46 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
 
     private async ValueTask<IConnection> EnsureConnectionAsync(CancellationToken cancellationToken)
     {
-        if (_connection?.IsOpen == true) return _connection;
+        // Fast path: both connection AND publish channel still healthy. A channel can
+        // die from an AMQP-level error (e.g. publish to a missing exchange) while the
+        // connection stays open, so checking only IsOpen on the connection is not enough.
+        if (_connection?.IsOpen == true && _publishChannel?.IsOpen == true)
+            return _connection;
+
         await _connectLock.WaitAsync(cancellationToken).ConfigureAwait(false);
         try
         {
-            if (_connection?.IsOpen == true) return _connection;
+            // Double-checked after lock.
+            if (_connection?.IsOpen == true && _publishChannel?.IsOpen == true)
+                return _connection;
+
+            // Connection is fine but channel died — just recreate the channel.
+            if (_connection?.IsOpen == true && _publishChannel?.IsOpen != true)
+            {
+                if (_publishChannel is not null)
+                {
+                    try { await _publishChannel.DisposeAsync().ConfigureAwait(false); } catch { }
+                }
+                _publishChannel = await _connection.CreateChannelAsync(
+                    new CreateChannelOptions(
+                        publisherConfirmationsEnabled: _options.PublisherConfirms,
+                        publisherConfirmationTrackingEnabled: _options.PublisherConfirms),
+                    cancellationToken).ConfigureAwait(false);
+                _logger.LogInformation("RabbitMQ publish channel recreated on existing connection.");
+                return _connection;
+            }
+
+            // Connection is dead (or never opened). Iterate failover candidates.
+            if (_publishChannel is not null)
+            {
+                try { await _publishChannel.DisposeAsync().ConfigureAwait(false); } catch { }
+                _publishChannel = null;
+            }
+            if (_connection is not null)
+            {
+                try { await _connection.DisposeAsync().ConfigureAwait(false); } catch { }
+                _connection = null;
+            }
 
             Exception? lastError = null;
             foreach (var conn in _options.ConnectionStrings)
@@ -120,15 +155,17 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
         try
         {
             var conn = await EnsureConnectionAsync(cancellationToken).ConfigureAwait(false);
-            await using var ch = await conn.CreateChannelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
 
+            // RabbitMQ closes the channel when QueueDeclarePassive hits a 404. Use a
+            // FRESH channel per probe so one missing queue doesn't poison the others.
             async Task<(bool ok, long depth)> ProbeAsync(LogicalQueueKind kind)
             {
                 if (!_options.Mappings.TryGetValue(new LogicalQueue(jobName, kind, tier).MappingKey, out var dest))
                     return (false, 0);
                 try
                 {
-                    var info = await ch.QueueDeclarePassiveAsync(dest.Queue, cancellationToken).ConfigureAwait(false);
+                    await using var probeCh = await conn.CreateChannelAsync(cancellationToken: cancellationToken).ConfigureAwait(false);
+                    var info = await probeCh.QueueDeclarePassiveAsync(dest.Queue, cancellationToken).ConfigureAwait(false);
                     return (true, info.MessageCount);
                 }
                 catch (OperationInterruptedException)
@@ -239,7 +276,23 @@ public sealed class RabbitMqQueueProvider : IQueueProvider
             {
                 var headers = MapHeaders(ea.BasicProperties, ea.Exchange);
                 var msg = new RabbitMqReceivedMessage(ch, new LogicalQueue(jobName, LogicalQueueKind.Main, tier), ea.Body, headers, ea.DeliveryTag, autoAck: options.AutoAck);
-                await queue.Writer.WriteAsync(msg, cancellationToken).ConfigureAwait(false);
+                try
+                {
+                    await queue.Writer.WriteAsync(msg, cancellationToken).ConfigureAwait(false);
+                }
+                catch (OperationCanceledException)
+                {
+                    // The iterator was cancelled between broker delivery and our channel write.
+                    // For autoAck=false the broker will redeliver after this channel closes.
+                    // For autoAck=true the broker has already acked — the message is lost; nack
+                    // wouldn't help (no delivery tag scope left). Log so the count is visible.
+                    _logger.LogDebug("Dropping in-flight delivery (tag={Tag}) during consumer cancellation.", ea.DeliveryTag);
+                }
+                catch (ChannelClosedException)
+                {
+                    // The iterator's finally already disposed the bridge channel; same handling.
+                    _logger.LogDebug("Dropping in-flight delivery (tag={Tag}) — bridge channel closed.", ea.DeliveryTag);
+                }
             };
 
             await ch.BasicConsumeAsync(

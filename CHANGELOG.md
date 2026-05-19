@@ -1,5 +1,70 @@
 # Changelog
 
+## 2.2.1 — Bug sweep rounds D / E / F / G
+
+Continuation of the iterative bug-fix loop after the v2.2.0 multi-tier
+failover work. No behavioural changes for the happy path; all fixes target
+edge cases that real production deployments will eventually hit.
+
+### Fixed
+
+* **Idempotency claim is now released on step failure, not marked completed.**
+  Previously the StepExecutor refactor (introduced in v2.2.0 for the Redis
+  `SETNX` correctness fix) marked the claim completed on ANY terminal outcome,
+  including failure. That silently turned `OnError=RetryJob` into "skip the
+  failed step on the retry" and made consumer-crash recovery skip the failed
+  step on redelivery. New contract: `MarkCompletedAsync` only on success,
+  `ReleaseAsync` (new optional interface method, default no-op) on failure.
+  Cancellation still leaves the claim in place to let the store's TTL govern.
+* **External cancellation of `StartFrameworkAsync` is now a soft-stop signal**
+  rather than a hard-stop. The `BackgroundService` hosting helper passes
+  `stoppingToken` into `StartFrameworkAsync`; under the old behaviour this
+  silently turned `softExitOnShutdown=true` into hard-cancel because the
+  internal `_shutdownCts` was linked to the external token. Now only
+  `_stopConsumingCts` is linked to it; for hard-stop, callers must invoke
+  `StopFrameworkAsync(isSoftExit:false)` explicitly.
+* **`StopFrameworkAsync` honours `cancellationToken` as a drain deadline.**
+  The soft-exit poll loop used to throw `OperationCanceledException` if the
+  caller's token fired mid-drain; now it returns cleanly, letting the caller
+  decide whether to escalate. Documented as: in-flight jobs that haven't
+  finished by the deadline keep running, they are NOT cancelled.
+* **Idempotency store `TryClaimAsync` failures are logged distinctly** so a
+  Redis/SQL outage is no longer misreported as a step failure. The exception
+  still propagates (message requeues), but a new event ID 3005 surfaces the
+  infrastructure failure separately from `JobFailed` (2003).
+* **Fire-and-forget step infrastructure failures are no longer swallowed.**
+  Both `SequentialExecutor` and `PipelinedExecutor` wrap their `Task.Run`
+  in a try/catch so an idempotency-store throw, step-factory throw, or other
+  out-of-band failure lands as event ID 3006 instead of an unobserved task
+  exception that only the GC's finaliser ever sees.
+* **`InMemoryQueueProvider` no longer silently drops messages on Nack-requeue
+  under backpressure.** The provider used `TryWrite` (which returns false on
+  full channels); now it uses `WriteAsync` so requeue blocks until capacity
+  is available. The `OnNackRequeue` callback type changed from `Action` to
+  `Func<…, ValueTask>` to enable the await.
+* **RabbitMQ `ConsumeAsync` event handler tolerates in-flight deliveries
+  during shutdown.** Previously, deliveries that landed between cancellation
+  and channel close threw `OperationCanceledException` from inside the
+  handler, which RabbitMQ.Client surfaced as noise (and for `autoAck=true`
+  caused real message loss). Now caught and logged at Debug; `autoAck=false`
+  redelivers as designed.
+* **Kafka and Azure Service Bus `DisposeAsync` paths now wrap each step**
+  so a throw on one underlying client doesn't skip cleanup of the others.
+  Shutdown is best-effort by contract.
+
+### Added
+
+* `IIdempotencyStore.ReleaseAsync` — optional interface method with a default
+  no-op so existing custom implementations don't need to change. The
+  `InMemoryIdempotencyStore` implements it (removes from the claimed set).
+* `IdempotencyTests.InMemoryStore_Release_Allows_Reclaim` and
+  `IdempotencyTests.Failed_Step_Releases_Claim_So_Redelivery_Retries` —
+  regression tests for the claim-release contract.
+* `ProcessorSoftExitTests.External_Cancellation_Soft_Stops_Without_Cancelling_InFlight_Job`
+  — regression test for the soft-stop cancellation semantics fix.
+* New log event IDs: 3004 (`IdempotencyReleaseFailed`),
+  3005 (`IdempotencyClaimFailed`), 3006 (`FireAndForgetStepFaulted`).
+
 ## 2.2.0 — Restore v1 multi-tier queue failover
 
 Brings back the resilience feature from the original 2010 engine: when a job
