@@ -1,21 +1,11 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+// Copyright (c) Inverted Software. All rights reserved.
 
-namespace InvertedSoftware.WorkflowEngine.Messages
+namespace InvertedSoftware.WorkflowEngine.Messages;
+
+/// <summary>Error summary written to the Error queue when a step fails.</summary>
+public class WorkflowErrorMessage
 {
-	[Serializable]
-	public class WorkflowErrorMessage
-	{
-		public string JobName { get; set; }
-		public string StepName { get; set; }
-		public string ExceptionMessage { get; set; }
-	}
+    public string JobName { get; set; } = string.Empty;
+    public string StepName { get; set; } = string.Empty;
+    public string ExceptionMessage { get; set; } = string.Empty;
 }

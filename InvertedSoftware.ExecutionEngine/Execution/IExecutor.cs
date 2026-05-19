@@ -1,16 +1,19 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+// Copyright (c) Inverted Software. All rights reserved.
 
-using InvertedSoftware.WorkflowEngine.Messages;
 using InvertedSoftware.WorkflowEngine.DataObjects;
+using InvertedSoftware.WorkflowEngine.Messages;
 
-namespace InvertedSoftware.WorkflowEngine.Execution
+namespace InvertedSoftware.WorkflowEngine.Execution;
+
+internal interface IExecutor
 {
-    internal interface IExecutor
-    {
-        ProcessorJob ProcessorJob { get; set; }
-        void RunFrameworkJob(IWorkflowMessage workflowMessage, int retryJobTimes, bool isCheckDepends);
-    }
+    /// <summary>The job template; cloned per invocation by the executor.</summary>
+    ProcessorJob ProcessorJob { get; set; }
+
+    /// <summary>Execute the job's steps for a single message.</summary>
+    Task RunFrameworkJobAsync(
+        IWorkflowMessage workflowMessage,
+        int retryJobTimes,
+        bool isCheckDepends,
+        CancellationToken cancellationToken);
 }

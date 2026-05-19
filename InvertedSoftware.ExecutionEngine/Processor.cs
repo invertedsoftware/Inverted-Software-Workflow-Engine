@@ -1,385 +1,341 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading;
-using System.Messaging;
-using System.Transactions;
-using System.Threading.Tasks;
-using System.Collections.Concurrent;
+// Copyright (c) Inverted Software. All rights reserved.
 
-using InvertedSoftware.WorkflowEngine.DataObjects;
-using InvertedSoftware.WorkflowEngine.Common.Security;
-using InvertedSoftware.WorkflowEngine.Messages;
-using InvertedSoftware.WorkflowEngine.Steps;
-using InvertedSoftware.WorkflowEngine.Common.Exceptions;
-using InvertedSoftware.WorkflowEngine.Config;
+using System.Diagnostics;
 using InvertedSoftware.WorkflowEngine.Common;
+using InvertedSoftware.WorkflowEngine.Config;
+using InvertedSoftware.WorkflowEngine.DataObjects;
+using InvertedSoftware.WorkflowEngine.Diagnostics;
 using InvertedSoftware.WorkflowEngine.Execution;
+using InvertedSoftware.WorkflowEngine.Messages;
+using InvertedSoftware.WorkflowEngine.Queue;
+using Microsoft.Extensions.Logging;
 
+namespace InvertedSoftware.WorkflowEngine;
 
-
-
-namespace InvertedSoftware.WorkflowEngine
+/// <summary>
+/// Consumes messages from the main queue and dispatches them to an
+/// <see cref="IExecutor"/>. Implements <see cref="IJobReporter"/> so executors
+/// can publish error / completion notifications back through the same provider.
+/// </summary>
+public sealed class Processor : IJobReporter, IDisposable
 {
-	/// <summary>
-	/// The class in charge of processing framework jobs
-	/// </summary>
-	public class Processor
-	{
-		/// <summary>
-		/// Indicates to the framework to stop processing at the end of the current job
-		/// </summary>
-		public bool StopProcess { get; set; }
-		/// <summary>
-		/// Get the count of jobs currently running
-		/// </summary>
-		public int JobsRunning;
-		/// <summary>
-		/// Indicates that the framework is currently on
-		/// </summary>
-		public bool FrameworkOn { get; set; }
-		private ProcessorJob processorJob { get; set; }
-		Impersonation impersonate = null;
-		ProcessorQueue ProcessorQueue { get; set; }
-		// Threading variables
-		private static Semaphore pool; // Limit the number of threads that can work on jobs
+    private readonly WorkflowEngineHost _host;
+    private readonly ILogger<Processor> _logger;
+    private readonly SemaphoreSlim _pool;
 
-		private IExecutor executor = null;
-		/// <summary>
-		/// Constracor
-		/// </summary>
-		public Processor()
-		{
-			ProcessorQueue = new ProcessorQueue();
-			impersonate = new Impersonation();
-			impersonate.ImpersonationLogonType = WorkflowEngine.Common.Security.ImpersonationLogonType.LOGON32_LOGON_NEW_CREDENTIALS;
-			if (Utils.PROCESSOR_COUNT > 1 && EngineConfiguration.UsePipelinedOnMulticore)
-				executor = new PipelinedExecutor();
-			else
-				executor = new SequentialExecutor();
-		}
+    private ProcessorJob _processorJob = new();
+    private IExecutor? _executor;
+    // Two-stage cancellation:
+    //   _stopConsumingCts fires first (StopFrameworkAsync, soft and hard) and unblocks
+    //     the ConsumeAsync iterator so no new messages are picked up.
+    //   _shutdownCts fires on hard-stop only; in-flight jobs see this and nack-requeue.
+    // A pure soft-stop cancels _stopConsumingCts but lets running jobs ack normally.
+    private CancellationTokenSource? _stopConsumingCts;
+    private CancellationTokenSource? _shutdownCts;
 
-		/// <summary>
-		/// This fires in the rare event when the queue goes offline. The framework will then look for another queue
-		/// This will simply soft restart the processor, which will point to the next available queue
-		/// </summary>
-		/// <param name="sender"></param>
-		/// <param name="e"></param>
-		void ProcessorQueue_ProcessorQueueChanged(object sender, ProcessorQueueChangedEventArgs e)
-		{
-			//The queue have changed. restart the framework pointing to the new Queue
-			ProcessorQueue.ProcessorQueueChanged -= new ProcessorQueue.ProcessorQueueEventHandler(ProcessorQueue_ProcessorQueueChanged);
-			StopFramework(true);
-			Thread.Sleep(10000); // Give the framework ten seconds to commit any transactions
-			StopProcess = false;
-			StartFramework(processorJob.JobName);
-		}
+    public Processor(WorkflowEngineHost host)
+    {
+        _host = host ?? throw new ArgumentNullException(nameof(host));
+        _logger = host.CreateLogger<Processor>();
+        _pool = new SemaphoreSlim(_host.Options.FrameworkMaxThreads, _host.Options.FrameworkMaxThreads);
+    }
 
-		/// <summary>
-		/// This method starts the framework and blocks.
-		/// Call this from an exe or a windows service on a new thread.
-		/// </summary>
-		/// <param name="jobName">The workflow job name</param>
-		public void StartFramework(string jobName)
-		{
-			processorJob = new ProcessorJob();
-			processorJob.JobName = jobName;
-			pool = new Semaphore(EngineConfiguration.FrameworkMaxThreads, EngineConfiguration.FrameworkMaxThreads);
-			JobsRunning = 0;
-			// Load the config file and start processing jobs
-			WorkflowConfiguration.LoadFrameworkConfig(processorJob);
-			FrameworkOn = true;
-			LoadActiveQueue();
-			ProcessorQueue.ProcessorQueueChanged += new ProcessorQueue.ProcessorQueueEventHandler(ProcessorQueue_ProcessorQueueChanged);
-			executor.ProcessorJob = processorJob;
-			RunFramework(5, 0, 5);
-			FrameworkOn = false;
-		}
+    /// <summary>Count of jobs currently executing.</summary>
+    public int JobsRunning;
 
-		/// <summary>
-		/// Stop the framework from processing any more jobs
-		/// </summary>
-		/// <param name="isSoftExit">Block untill the current jobs are done</param>
-		public void StopFramework(bool isSoftExit)
-		{
-			StopProcess = true;
-			//Wait until the framework stopped
-			while (isSoftExit && JobsRunning > 0)
-				Thread.Sleep(500);
-		}
+    /// <summary>True while <see cref="StartFrameworkAsync"/> has not yet returned.</summary>
+    public bool FrameworkOn { get; private set; }
 
-		/// <summary>
-		/// Starts to run the framework
-		/// </summary>
-		/// <param name="exceptionsBeforeExit">Number of times to try and run the framework</param>
-		/// <param name="currentExceptionNumber">Current Exception Number</param>
-		/// <param name="pauseFor">Wait between retrys in seconds</param>
-		private void RunFramework(int exceptionsBeforeExit, int currentExceptionNumber, int pauseFor)
-		{
-			try
-			{
-				MessageQueue workflowQueue = new MessageQueue(ProcessorQueue.MessageQueue);
-				Guid QID = workflowQueue.Id;
-				workflowQueue.Dispose();
-				if (ProcessorQueue.MessageQueueType == MessageQueueType.Transactional)
-					if (ProcessorQueue.MessageQueue.StartsWith(@".\"))
-						RunTransactionalFramework();
-					else
-						RunRemoteTransactionalFramework();
-				else
-					RunFramework();
-			}
-			catch (Exception e)
-			{
-				currentExceptionNumber++;
-				if (currentExceptionNumber <= exceptionsBeforeExit)
-				{
-					Thread.Sleep(pauseFor * 1000);
-					RunFramework(exceptionsBeforeExit, currentExceptionNumber, pauseFor);
-				}
-				else
-					throw new FrameworkFatalException("Fatal Error in the framework: " + e.Message, e);
-			}
-		}
+    /// <summary>
+    /// Start consuming the named job's main queue and processing messages.
+    /// Returns when the framework stops (after <see cref="StopFrameworkAsync"/> is invoked
+    /// or the supplied <paramref name="cancellationToken"/> fires).
+    /// </summary>
+    public async Task StartFrameworkAsync(string jobName, CancellationToken cancellationToken = default)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(jobName);
 
-		/// <summary>
-		/// Starts to listen to a local Transactional Queue and process Jobs
-		/// </summary>
-		private void RunTransactionalFramework()
-		{
-			using (MessageQueue workflowQueue = new MessageQueue(ProcessorQueue.MessageQueue))
-			{
-				((XmlMessageFormatter)workflowQueue.Formatter).TargetTypes = new System.Type[] { Type.GetType(Utils.MESSAGE_BASE_TYPE + "." + processorJob.MessageClass) };
-				workflowQueue.MessageReadPropertyFilter.Priority = true;
+        _processorJob = new ProcessorJob { JobName = jobName };
+        _host.Configuration.LoadFrameworkConfig(_processorJob);
 
-				while (!StopProcess)
-				{
-					// Read a message from the Queue and process it
-					MessageQueueTransaction transaction = new MessageQueueTransaction();
-					try
-					{
-						pool.WaitOne();
-						transaction.Begin();
-						Message queueMessage = workflowQueue.Receive(transaction);
-						//Start the job in a new thread. Do not exceed AppsConfig.FrameworkMaxThreads 
-						Task.Factory.StartNew(() => RunFrameworkJob(queueMessage, transaction));
-						Interlocked.Increment(ref JobsRunning);
-					}
-					catch (MessageQueueException e)
-					{
-						Interlocked.Decrement(ref JobsRunning);
-						pool.Release();
-						transaction.Abort();
-						throw new WorkflowException("Error getting framework job from queue: An internal Message Queuing error occured", e);
-					}
-					catch (InvalidOperationException e)
-					{
-						Interlocked.Decrement(ref JobsRunning);
-						pool.Release();
-						transaction.Commit();
-						throw new WorkflowException("Error begining transaction: The transaction has already been started.", e);
-					}
-					catch (Exception e)
-					{
-						Interlocked.Decrement(ref JobsRunning);
-						pool.Release();
-						transaction.Abort();
-						throw new WorkflowException("General Error Starting Framework Job.", e);
-					}
-				}
-			}
-		}
+        _executor = (Utils.PROCESSOR_COUNT > 1 && _host.Options.UsePipelinedOnMulticore)
+            ? new PipelinedExecutor(_host, this)
+            : new SequentialExecutor(_host, this);
+        _executor.ProcessorJob = _processorJob;
 
-		/// <summary>
-		/// Starts to listen to a remote Transactional Queue and process Jobs
-		/// This is not tested yet
-		/// </summary>
-		private void RunRemoteTransactionalFramework()
-		{
-			MessageQueue workflowQueue = new MessageQueue(ProcessorQueue.MessageQueue);
-			((XmlMessageFormatter)workflowQueue.Formatter).TargetTypes = new System.Type[] { Type.GetType(Utils.MESSAGE_BASE_TYPE + "." + processorJob.MessageClass) };
-			workflowQueue.MessageReadPropertyFilter.Priority = true;
-			workflowQueue.PeekCompleted += new PeekCompletedEventHandler(workflowQueue_PeekCompleted);
-			pool.WaitOne();
-			workflowQueue.BeginPeek();
-			while (!StopProcess)
-			{
-				Thread.Sleep(TimeSpan.FromSeconds(10));
-			}
-		}
+        _stopConsumingCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _shutdownCts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        FrameworkOn = true;
+        Log.FrameworkStarted(_logger, jobName);
 
-		void workflowQueue_PeekCompleted(object sender, PeekCompletedEventArgs e)
-		{
-			MessageQueue workflowQueue = (MessageQueue)sender;
-			using (TransactionScope txScope = new TransactionScope(TransactionScopeOption.RequiresNew))
-			{
-				try
-				{
-					Message queueMessage = workflowQueue.Receive(MessageQueueTransactionType.Automatic);
-					Task.Factory.StartNew(() => RunFrameworkJob(queueMessage, null));
-					Interlocked.Increment(ref JobsRunning);
-					txScope.Complete();
-				}
-				catch (MessageQueueException ex)
-				{
-					Interlocked.Decrement(ref JobsRunning);
-					pool.Release();
-					if (ex.MessageQueueErrorCode == MessageQueueErrorCode.QueueNotAvailable)
-						LoadActiveQueue();
-					else
-						throw new WorkflowException("Error getting framework job from queue: An internal Message Queuing error occured", ex);
-				}
-				catch (InvalidOperationException ex)
-				{
-					Interlocked.Decrement(ref JobsRunning);
-					pool.Release();
-					throw new WorkflowException("Error begining transaction: The transaction has already been started.", ex);
-				}
-				catch (Exception ex)
-				{
-					Interlocked.Decrement(ref JobsRunning);
-					pool.Release();
-					throw new WorkflowException("General Error Starting Framework Job.", ex);
-				}
-			}
+        try
+        {
+            await RunFrameworkAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            FrameworkOn = false;
+            Log.FrameworkStopped(_logger, jobName);
+        }
+    }
 
-			if (!StopProcess)
-			{
-				pool.WaitOne();
-				workflowQueue.BeginPeek();
-			}
-		}
+    /// <summary>
+    /// Stop the consumer. When <paramref name="isSoftExit"/> is <c>true</c>, in-flight
+    /// jobs continue running to natural completion and ack normally; this call awaits
+    /// them. When <c>false</c>, in-flight jobs see a cancelled token and nack-requeue.
+    /// </summary>
+    public async Task StopFrameworkAsync(bool isSoftExit, CancellationToken cancellationToken = default)
+    {
+        Log.FrameworkStopping(_logger, _processorJob.JobName, isSoftExit);
+        _stopConsumingCts?.Cancel();
 
-		private void RunFramework()
-		{
-			using (MessageQueue workflowQueue = new MessageQueue(ProcessorQueue.MessageQueue))
-			{
-				((XmlMessageFormatter)workflowQueue.Formatter).TargetTypes = new System.Type[] { Type.GetType(Utils.MESSAGE_BASE_TYPE + processorJob.MessageClass) };
-				workflowQueue.MessageReadPropertyFilter.Priority = true;
+        if (!isSoftExit)
+        {
+            _shutdownCts?.Cancel();
+            return;
+        }
 
-				while (!StopProcess)
-				{
-					// Read a message from the Queue and process it
-					try
-					{
-						pool.WaitOne();
-						Message queueMessage = workflowQueue.Receive();
-						//Start the job in a new thread. Do not exceed AppsConfig.FrameworkMaxThreads                    
-						Task.Factory.StartNew(() => RunFrameworkJob(queueMessage, null));
-						Interlocked.Increment(ref JobsRunning);
-					}
-					catch (MessageQueueException e)
-					{
-						Interlocked.Decrement(ref JobsRunning);
-						pool.Release();
-						throw new WorkflowException("Error getting framework job from queue: An internal Message Queuing error occured", e);
-					}
-					catch (Exception e)
-					{
-						Interlocked.Decrement(ref JobsRunning);
-						pool.Release();
-						throw new WorkflowException("General Error Starting Framework Job.", e);
-					}
-				}
-			}
-		}
+        while (Volatile.Read(ref JobsRunning) > 0)
+            await Task.Delay(200, cancellationToken).ConfigureAwait(false);
+    }
 
-		/// <summary>
-		/// Runs a single job thread
-		/// </summary>
-		/// <param name="data"></param>
-		private void RunFrameworkJob(Message queueMessage, MessageQueueTransaction transaction)
-		{
-			JobTimer jobTimer = new JobTimer(processorJob.MaxRunTimeMilliseconds, Thread.CurrentThread); // The timer terminates jobs that take too much time to run
-			try
-			{
-				int retryJobTimes = 0;
-				IWorkflowMessage workflowMessage = queueMessage.Body as IWorkflowMessage;
-				bool isCheckDepends = true;
-				if (workflowMessage.JobID < 0) // This is a re-run
-				{
-					workflowMessage.JobID = -workflowMessage.JobID;
-					isCheckDepends = false;
-				}
-				executor.RunFrameworkJob(workflowMessage, retryJobTimes, isCheckDepends);
-				retryJobTimes = 0;
-			}
-			catch (Exception e)
-			{
-				new WorkflowException("Error running framework job", e);
-			}
-			finally
-			{
-				pool.Release();
-				jobTimer.StopTimer();
-				Interlocked.Decrement(ref JobsRunning);
-				// Commit removing of the queue message at the end of the job
-				try
-				{
-					if (transaction != null)
-					{
-						transaction.Commit();
-						transaction.Dispose();
-					}
-				}
-				catch (InvalidOperationException e)
-				{
-					new WorkflowException("Error commiting queue transaction: The transaction you are trying to commit has not started.", e);
-				}
-				catch (MessageQueueException e)
-				{
-					new WorkflowException("Error commiting queue transaction: An internal Message Queuing error occured.", e);
-				}
-			}
-			//Find out the active Queue for the next Job
-			LoadActiveQueue();
-		}
+    /// <summary>Synchronous shim — prefer <see cref="StopFrameworkAsync"/>.</summary>
+    public void StopFramework(bool isSoftExit) =>
+        StopFrameworkAsync(isSoftExit).GetAwaiter().GetResult();
 
-		/// <summary>
-		/// Reports a job error
-		/// </summary>
-		/// <param name="e">The exception to report</param>
-		/// <param name="step">The step the exception accrued</param>
-		/// <param name="workflowMessage">The original message pulled from the queue</param>
-		public static void ReportJobError(Exception e, ProcessorStep workflowStep, IWorkflowMessage workflowMessage, ProcessorJob currentJob)
-		{
-			// Push an error message to the error Queue
-			WorkflowErrorMessage errorMessage = new WorkflowErrorMessage() { ExceptionMessage = e.Message, JobName = currentJob.JobName, StepName = workflowStep.StepName };
+    /// <summary>Synchronous shim — prefer <see cref="StartFrameworkAsync"/>.</summary>
+    public void StartFramework(string jobName) =>
+        StartFrameworkAsync(jobName).GetAwaiter().GetResult();
 
-			//if e contains inner exceptions, add those messages
-			while (e.InnerException != null)
-			{
-				//assign e to the inner exception - recursive
-				e = e.InnerException;
-				errorMessage.ExceptionMessage += '|' + e.Message;
-			}
+    private async Task RunFrameworkAsync()
+    {
+        var consumeOptions = new ConsumeOptions
+        {
+            Prefetch = _host.Options.FrameworkMaxThreads,
+            AutoAck = _processorJob.MessageQueueType == MessageQueueType.NonTransactional,
+            AckTimeout = TimeSpan.FromMilliseconds(Math.Max(_processorJob.MaxRunTimeMilliseconds, 60_000)),
+        };
 
-			FrameworkManager.AddFrameworkError(currentJob, workflowMessage, errorMessage);
-		}
+        var stopConsuming = _stopConsumingCts!.Token;
+        var shutdown = _shutdownCts!.Token;
 
-		public static void ReportJobComplete(IWorkflowMessage workflowMessage, ProcessorJob currentJob)
-		{
-			if (currentJob.NotifyComplete &&
-				currentJob.WorkFlowSteps.Where(s => s.RunStatus == FrameworkStepRunStatus.Complete).Count() == currentJob.WorkFlowSteps.Count())
-				FrameworkManager.AddFrameworkJobComplete(currentJob, workflowMessage);
-		}
+        try
+        {
+            await foreach (var received in _host.QueueProvider
+                .ConsumeAsync(_processorJob.JobName, consumeOptions, stopConsuming)
+                .ConfigureAwait(false))
+            {
+                // Bound the pool wait to `shutdown` (not stopConsuming) so a soft-stop
+                // doesn't drop a message we've already received from the broker; the
+                // soft-stop contract is "finish what you have". Hard-stop still bails.
+                await _pool.WaitAsync(shutdown).ConfigureAwait(false);
+                Interlocked.Increment(ref JobsRunning);
+                WorkflowTelemetry.JobsInFlight.Add(1,
+                    new KeyValuePair<string, object?>("job", _processorJob.JobName));
 
-		/// <summary>
-		/// Load the active Queue for the next Job
-		/// </summary>
-		private void LoadActiveQueue()
-		{
-			ProcessorQueue ActiveQueue = FrameworkManager.GetActiveQueue(processorJob, QueueOperationType.Pickup);
-			ProcessorQueue.ErrorQueue = ActiveQueue.ErrorQueue;
-			ProcessorQueue.MessageQueueType = ActiveQueue.MessageQueueType;
-			ProcessorQueue.MessageQueue = ActiveQueue.MessageQueue; // This will fire an event if the Queue changed
-		}
-	}
+                _ = Task.Run(() => RunFrameworkJobAsync(received, shutdown), CancellationToken.None);
+            }
+        }
+        catch (OperationCanceledException) when (stopConsuming.IsCancellationRequested || shutdown.IsCancellationRequested)
+        {
+            // Graceful: StopFrameworkAsync was called (soft or hard).
+        }
+    }
+
+    private async Task RunFrameworkJobAsync(IReceivedMessage received, CancellationToken outerToken)
+    {
+        var jobName = _processorJob.JobName;
+
+        // Start a consumer-side Activity linked to the producer's traceparent.
+        using var activity = StartConsumeActivity(received, jobName);
+
+        using var jobCts = CancellationTokenSource.CreateLinkedTokenSource(outerToken);
+        jobCts.CancelAfter(_processorJob.MaxRunTimeMilliseconds);
+
+        var stopwatch = Stopwatch.StartNew();
+        IWorkflowMessage? workflowMessage = null;
+        var outcome = "complete";
+        try
+        {
+            // Deserialize and type-check. A wrong-type body (schema drift, mismatched
+            // MessageType header) is treated as a deserialization error, not a generic
+            // failure — without this guard the InvalidCastException would silently ack
+            // the message.
+            var deserialized = received.DeserializeBody(_host.Serializer);
+            if (deserialized is not IWorkflowMessage msg)
+            {
+                throw new MessageDeserializationException(
+                    $"Body deserialized to '{deserialized?.GetType().FullName ?? "null"}' which does not implement IWorkflowMessage.");
+            }
+            workflowMessage = msg;
+
+            // Detect rerun BEFORE tagging/logging so telemetry shows the absolute JobID
+            // with an explicit is_rerun flag, rather than a confusing negative number.
+            var isRerun = workflowMessage.JobID < 0;
+            if (isRerun) workflowMessage.JobID = -workflowMessage.JobID;
+            var isCheckDepends = !isRerun;
+
+            activity?.SetTag(Telemetry.Tags.JobId, workflowMessage.JobID);
+            if (isRerun) activity?.SetTag("workflow.is_rerun", true);
+            Log.JobReceived(_logger, jobName, received.Headers.MessageId, workflowMessage.JobID);
+
+            await _executor!.RunFrameworkJobAsync(workflowMessage, retryJobTimes: 0, isCheckDepends, jobCts.Token).ConfigureAwait(false);
+            await received.AckAsync(outerToken).ConfigureAwait(false);
+
+            stopwatch.Stop();
+            Log.JobCompleted(_logger, jobName, workflowMessage.JobID, stopwatch.ElapsedMilliseconds);
+        }
+        catch (MessageDeserializationException e)
+        {
+            outcome = "deserialization_error";
+            activity?.SetStatus(ActivityStatusCode.Error, e.Message);
+            Log.JobDeserializationFailed(_logger, e, jobName, received.Headers.MessageType);
+            WorkflowTelemetry.Errors.Add(1,
+                new KeyValuePair<string, object?>("job", jobName),
+                new KeyValuePair<string, object?>("kind", "deserialization"));
+            await PublishPoisonAsync(received, e.Message, outerToken).ConfigureAwait(false);
+            await received.AckAsync(outerToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (jobCts.IsCancellationRequested && !outerToken.IsCancellationRequested)
+        {
+            outcome = "timeout";
+            stopwatch.Stop();
+            activity?.SetStatus(ActivityStatusCode.Error, "job timeout");
+            WorkflowTelemetry.Errors.Add(1,
+                new KeyValuePair<string, object?>("job", jobName),
+                new KeyValuePair<string, object?>("kind", "timeout"));
+            if (workflowMessage is not null)
+            {
+                Log.JobTimedOut(_logger, jobName, workflowMessage.JobID, stopwatch.ElapsedMilliseconds, _processorJob.MaxRunTimeMilliseconds);
+                var timeoutStep = _processorJob.WorkFlowSteps.FirstOrDefault() ?? new ProcessorStep { StepName = "<unknown>" };
+                await ReportJobErrorAsync(
+                    new TimeoutException($"Job exceeded MaxRunTimeMilliseconds={_processorJob.MaxRunTimeMilliseconds}"),
+                    timeoutStep, workflowMessage, _processorJob, outerToken).ConfigureAwait(false);
+            }
+            await received.AckAsync(outerToken).ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (outerToken.IsCancellationRequested)
+        {
+            outcome = "cancelled";
+            // Engine shutdown: requeue so a later worker can try again.
+            try { await received.NackAsync(requeue: true, CancellationToken.None).ConfigureAwait(false); }
+            catch { /* best-effort on shutdown */ }
+        }
+        catch (Exception e)
+        {
+            outcome = "error";
+            activity?.SetStatus(ActivityStatusCode.Error, e.Message);
+            WorkflowTelemetry.Errors.Add(1,
+                new KeyValuePair<string, object?>("job", jobName),
+                new KeyValuePair<string, object?>("kind", "step_failure"));
+            if (workflowMessage is not null)
+            {
+                var step = _processorJob.WorkFlowSteps.FirstOrDefault() ?? new ProcessorStep { StepName = "<unknown>" };
+                Log.JobFailed(_logger, e, jobName, workflowMessage.JobID, step.StepName);
+                await ReportJobErrorAsync(e, step, workflowMessage, _processorJob, outerToken).ConfigureAwait(false);
+            }
+            await received.AckAsync(outerToken).ConfigureAwait(false);
+        }
+        finally
+        {
+            stopwatch.Stop();
+            _pool.Release();
+            Interlocked.Decrement(ref JobsRunning);
+
+            WorkflowTelemetry.JobsInFlight.Add(-1,
+                new KeyValuePair<string, object?>("job", jobName));
+            WorkflowTelemetry.JobsProcessed.Add(1,
+                new KeyValuePair<string, object?>("job", jobName),
+                new KeyValuePair<string, object?>("outcome", outcome));
+            WorkflowTelemetry.JobDuration.Record(stopwatch.Elapsed.TotalSeconds,
+                new KeyValuePair<string, object?>("job", jobName),
+                new KeyValuePair<string, object?>("outcome", outcome));
+        }
+    }
+
+    private static Activity? StartConsumeActivity(IReceivedMessage received, string jobName)
+    {
+        // Pull parent context from the W3C traceparent header (set by the producer).
+        ActivityContext parentContext = default;
+        if (received.Headers.TryGetValue(Telemetry.TraceHeaders.TraceParent, out var traceparent)
+            && ActivityContext.TryParse(traceparent, null, out var ctx))
+        {
+            parentContext = ctx;
+        }
+
+        var activity = WorkflowTelemetry.ActivitySource.StartActivity(
+            Telemetry.Activities.Consume,
+            ActivityKind.Consumer,
+            parentContext);
+
+        activity?.SetTag(Telemetry.Tags.JobName, jobName);
+        activity?.SetTag(Telemetry.Tags.MessagingOperation, "receive");
+        if (received.Headers.MessageId is { } messageId)
+            activity?.SetTag(Telemetry.Tags.MessageId, messageId);
+
+        return activity;
+    }
+
+    // ---- IJobReporter --------------------------------------------------------
+
+    Task IJobReporter.ReportJobErrorAsync(Exception exception, ProcessorStep workflowStep, IWorkflowMessage workflowMessage, ProcessorJob currentJob, CancellationToken cancellationToken)
+        => ReportJobErrorAsync(exception, workflowStep, workflowMessage, currentJob, cancellationToken);
+
+    Task IJobReporter.ReportJobCompleteAsync(IWorkflowMessage workflowMessage, ProcessorJob currentJob, CancellationToken cancellationToken)
+        => QueueOperationsHandler.HandleCompleteAsync(_host, currentJob.JobName, workflowMessage, cancellationToken);
+
+    private Task ReportJobErrorAsync(Exception exception, ProcessorStep workflowStep, IWorkflowMessage workflowMessage, ProcessorJob currentJob, CancellationToken cancellationToken)
+    {
+        var error = new WorkflowErrorMessage
+        {
+            JobName = currentJob.JobName,
+            StepName = workflowStep.StepName,
+            ExceptionMessage = exception.Message,
+        };
+        var inner = exception.InnerException;
+        while (inner is not null)
+        {
+            error.ExceptionMessage += $"|{inner.Message}";
+            inner = inner.InnerException;
+        }
+        return QueueOperationsHandler.HandleErrorAsync(_host, currentJob.JobName, workflowMessage, error, cancellationToken);
+    }
+
+    private async Task PublishPoisonAsync(IReceivedMessage received, string reason, CancellationToken cancellationToken)
+    {
+        var headers = new MessageHeaders
+        {
+            ContentType = _host.Serializer.ContentType,
+            MessageType = received.Headers.MessageType,
+            CorrelationId = received.Headers.CorrelationId,
+        };
+        headers["x-wf-poison-reason"] = reason;
+
+        try
+        {
+            await _host.QueueProvider.PublishAsync(
+                new LogicalQueue(_processorJob.JobName, LogicalQueueKind.Poison),
+                received.Body,
+                headers,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (QueueProviderException e)
+        {
+            // Best-effort — the original is being ack'd regardless to prevent a poison loop,
+            // but we log so the broker outage is visible.
+            Log.SecondaryPublishFailed(_logger, e, _processorJob.JobName, "Poison");
+            WorkflowTelemetry.Errors.Add(1,
+                new KeyValuePair<string, object?>("job", _processorJob.JobName),
+                new KeyValuePair<string, object?>("kind", "secondary_publish"));
+        }
+    }
+
+    public void Dispose()
+    {
+        _stopConsumingCts?.Cancel();
+        _shutdownCts?.Cancel();
+        _stopConsumingCts?.Dispose();
+        _shutdownCts?.Dispose();
+        _pool.Dispose();
+    }
 }

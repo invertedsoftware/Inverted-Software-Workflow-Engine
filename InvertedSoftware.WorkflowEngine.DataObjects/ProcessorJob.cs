@@ -1,166 +1,120 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Runtime.Serialization.Formatters.Binary;
-using System.IO;
+// Copyright (c) Inverted Software. All rights reserved.
 
-namespace InvertedSoftware.WorkflowEngine.DataObjects
+namespace InvertedSoftware.WorkflowEngine.DataObjects;
+
+/// <summary>
+/// Acknowledgement mode for the queue. <see cref="Transactional"/> = ack on success,
+/// <see cref="NonTransactional"/> = auto-ack on receive (fire-and-forget). The names
+/// are preserved for backwards compatibility with the v1 Workflow.xml schema.
+/// </summary>
+public enum MessageQueueType
 {
-	/// <summary>
-	/// The type of Queue
-	/// </summary>
-	public enum MessageQueueType
-	{
-		Transactional,
-		NonTransactional
-	}
+    Transactional,
+    NonTransactional,
+}
 
-	/// <summary>
-	/// The operation to execute on the Queue
-	/// </summary>
-	public enum QueueOperationType
-	{
-		Pickup,
-		Delivery
-	}
-	/// <summary>
-	/// Holds a single framework job
-	/// </summary>
-	[Serializable()]
-	public class ProcessorJob: ICloneable
-	{
-		#region Config
-		/// <summary>
-		/// The name of the job
-		/// </summary>
-		public string JobName { get; set; }
-		/// <summary>
-		/// The Message class in the Queue
-		/// </summary>
-		public string MessageClass { get; set; }
-		/// <summary>
-		/// The location of the private Transactional Queue used to store the job
-		/// </summary>
-		public string MessageQueue { get; set; }
-		/// <summary>
-		/// The location of the private Transactional Queue used for job errors
-		/// </summary>
-		public string ErrorQueue { get; set; }
-		/// <summary>
-		/// PoisonQueue
-		/// </summary>
-		public string PoisonQueue { get; set; }
-		/// <summary>
-		/// The transactional queue containing the completed job message
-		/// </summary>
-		public string CompletedQueue { get; set; }
-		/// <summary>
-		/// When set to true sends the original message to the CompletedQueue on successful job compilation
-		/// </summary>
-		public bool NotifyComplete { get; set; }
-		/// <summary>
-		/// The Maximum time a job can run. The default is one hour
-		/// </summary>
-		public int MaxRunTimeMilliseconds { get; set; }
-		/// <summary>
-		/// The type of Queue
-		/// </summary>
-		public MessageQueueType MessageQueueType { get; set; }
-		/// <summary>
-		/// The list of Queues available for the framework
-		/// </summary>
-		public List<ProcessorQueue> ProcessorQueues { get; set; }
-		#endregion
+/// <summary>
+/// The operation that is about to be performed on the queue.
+/// Preserved for backwards-compat with the v1 Workflow.xml schema; no longer
+/// drives provider selection (failover is the provider's responsibility now).
+/// </summary>
+public enum QueueOperationType
+{
+    Pickup,
+    Delivery,
+}
 
-		#region Log
-		/// <summary>
-		/// The ID of the job in the database
-		/// </summary>
-		public int FrameworkJobID { get; set; }
-		/// <summary>
-		/// General description of this job
-		/// </summary>
-		public string Description { get; set; }
-		/// <summary>
-		/// XML Shaped message object to be stored in the database
-		/// </summary>
-		public string MessageData { get; set; }
-		/// <summary>
-		/// The User ID that created this job
-		/// </summary>
-		public int CreatedBy { get; set; }
-		/// <summary>
-		/// Indicates when the job was created and dropped int the Queue
-		/// </summary>
-		public DateTime? CreatedDate { get; set; }
-		/// <summary>
-		/// Indicates when the job was picked up from the Queue and started running
-		/// </summary>
-		public DateTime? StartDate { get; set; }
-		/// <summary>
-		/// Indicates when the job successfully finished running
-		/// </summary>
-		public DateTime? EndDate { get; set; }
-		/// <summary>
-		/// The last message to be set by the job or one of its steps
-		/// </summary>
-		public string ExitMessage { get; set; }
-		/// <summary>
-		/// Is this an active job
-		/// </summary>
-		public bool Active { get; set; }
-		#endregion
+/// <summary>
+/// A single framework job loaded from <c>Workflow.xml</c>.
+/// </summary>
+public class ProcessorJob
+{
+    #region Config
+    /// <summary>The job name.</summary>
+    public string JobName { get; set; } = string.Empty;
 
-		/// <summary>
-		/// List of steps in this job
-		/// </summary>
-		public List<ProcessorStep> WorkFlowSteps { get; set; }
+    /// <summary>The CLR type of the message class on this job's queue.</summary>
+    public string MessageClass { get; set; } = string.Empty;
 
-		public ProcessorJob()
-		{
-			JobName = string.Empty;
-			MessageClass = string.Empty;
-			MessageQueue = string.Empty;
-			ErrorQueue = string.Empty;
-			PoisonQueue = string.Empty;
-			CompletedQueue = string.Empty;
-			NotifyComplete = false;
-			MaxRunTimeMilliseconds = 3600000;
-			FrameworkJobID = -1;
-			Description = string.Empty;
-			MessageData = string.Empty;
-			CreatedBy = -1;
-			CreatedDate = null;
-			StartDate = null;
-			EndDate = null;
-			ExitMessage = string.Empty;
-			Active = true;
-			ProcessorQueues = new List<ProcessorQueue>();
-			WorkFlowSteps = new List<ProcessorStep>();
-		}
+    /// <summary>Logical name of the main message queue.</summary>
+    public string MessageQueue { get; set; } = string.Empty;
 
-		#region ICloneable Members
-		public object Clone()
-		{
-			object copy;
-			using (MemoryStream ms = new MemoryStream())
-			{
-				BinaryFormatter bf = new BinaryFormatter();
-				bf.Serialize(ms, this);
-				ms.Flush();
-				ms.Position = 0;
-				copy = bf.Deserialize(ms);
-			}
-			return copy;
-		}
-		#endregion
+    /// <summary>Logical name of the error queue.</summary>
+    public string ErrorQueue { get; set; } = string.Empty;
 
-	}
+    /// <summary>Logical name of the poison queue.</summary>
+    public string PoisonQueue { get; set; } = string.Empty;
+
+    /// <summary>Logical name of the completed queue.</summary>
+    public string CompletedQueue { get; set; } = string.Empty;
+
+    /// <summary>Send the original message to the completed queue on success.</summary>
+    public bool NotifyComplete { get; set; }
+
+    /// <summary>Maximum runtime for a single job before cancellation fires. Default = 1 hour.</summary>
+    public int MaxRunTimeMilliseconds { get; set; } = 3600000;
+
+    /// <summary>Transactional (ack on success) vs non-transactional (auto-ack on receive).</summary>
+    public MessageQueueType MessageQueueType { get; set; }
+
+    /// <summary>All declared queues for this job, in declaration order.</summary>
+    public List<ProcessorQueue> ProcessorQueues { get; set; } = new();
+    #endregion
+
+    #region Log
+    public int FrameworkJobID { get; set; } = -1;
+    public string Description { get; set; } = string.Empty;
+    public string MessageData { get; set; } = string.Empty;
+    public int CreatedBy { get; set; } = -1;
+    public DateTime? CreatedDate { get; set; }
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public string ExitMessage { get; set; } = string.Empty;
+    public bool Active { get; set; } = true;
+    #endregion
+
+    /// <summary>Ordered list of steps for this job.</summary>
+    public List<ProcessorStep> WorkFlowSteps { get; set; } = new();
+
+    /// <summary>
+    /// Produce an independent copy of this job suitable for per-job mutation of step
+    /// state. Replaces the BinaryFormatter-based <c>ICloneable.Clone()</c> implementation
+    /// from v1; that mechanism is removed in .NET 9+.
+    /// <para>
+    /// Event subscribers on contained <see cref="ProcessorQueue"/> instances are NOT
+    /// copied — handlers attached to the template config must not implicitly receive
+    /// per-job events.
+    /// </para>
+    /// </summary>
+    public ProcessorJob DeepCopy()
+    {
+        var copy = new ProcessorJob
+        {
+            JobName = JobName,
+            MessageClass = MessageClass,
+            MessageQueue = MessageQueue,
+            ErrorQueue = ErrorQueue,
+            PoisonQueue = PoisonQueue,
+            CompletedQueue = CompletedQueue,
+            NotifyComplete = NotifyComplete,
+            MaxRunTimeMilliseconds = MaxRunTimeMilliseconds,
+            MessageQueueType = MessageQueueType,
+            FrameworkJobID = FrameworkJobID,
+            Description = Description,
+            MessageData = MessageData,
+            CreatedBy = CreatedBy,
+            CreatedDate = CreatedDate,
+            StartDate = StartDate,
+            EndDate = EndDate,
+            ExitMessage = ExitMessage,
+            Active = Active,
+        };
+        copy.ProcessorQueues.Capacity = ProcessorQueues.Count;
+        foreach (var q in ProcessorQueues)
+            copy.ProcessorQueues.Add(q.DeepCopy());
+        copy.WorkFlowSteps.Capacity = WorkFlowSteps.Count;
+        foreach (var s in WorkFlowSteps)
+            copy.WorkFlowSteps.Add(s.DeepCopy());
+        return copy;
+    }
 }

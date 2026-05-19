@@ -1,144 +1,109 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+// Copyright (c) Inverted Software. All rights reserved.
 
-namespace InvertedSoftware.WorkflowEngine.DataObjects
+namespace InvertedSoftware.WorkflowEngine.DataObjects;
+
+public enum OnFrameworkStepError
 {
-	public enum OnFrameworkStepError
-	{
-		RetryJob,
-		Skip,
-		RetryStep,
-		Exit
-	}
+    RetryJob,
+    Skip,
+    RetryStep,
+    Exit,
+}
 
-	public enum FrameworkStepRunMode
-	{
-		STA,
-		MTA
-	}
+/// <summary>
+/// Execution mode for a step. <see cref="Synchronous"/> runs the step inline on the
+/// job thread; <see cref="FireAndForget"/> spawns it on the thread pool and does not
+/// wait. The legacy names <c>STA</c> / <c>MTA</c> are accepted by the Workflow.xml
+/// parser but the runtime no longer has anything to do with COM apartments.
+/// </summary>
+public enum StepExecutionMode
+{
+    Synchronous,
+    FireAndForget,
+}
 
-	public enum FrameworkStepRunStatus
-	{
-		Loaded,
-		Waiting,
-		Complete,
-		CompleteWithErrors
-	}
+/// <summary>Legacy alias of <see cref="StepExecutionMode"/> kept for binary back-compat.</summary>
+[Obsolete("Use StepExecutionMode. STA maps to Synchronous, MTA maps to FireAndForget.")]
+public enum FrameworkStepRunMode
+{
+    STA = StepExecutionMode.Synchronous,
+    MTA = StepExecutionMode.FireAndForget,
+}
 
-	/// <summary>
-	/// Holds a single framework step
-	/// </summary>
-	[Serializable()]
-	public class ProcessorStep
-	{
-		#region Config
-		/// <summary>
-		/// The name of the step
-		/// </summary>
-		public string StepName { get; set; }
-		/// <summary>
-		/// The name of the group this step belongs to
-		/// </summary>
-		public string Group { get; set; }
-		/// <summary>
-		/// Class to invoke for execution
-		/// </summary>
-		public string InvokeClass { get; set; }
-		/// <summary>
-		/// Operation to take on error: RetryJob|Skip|RetryStep|Exit. When run mode is MTA, only RetryStep can be applied
-		/// </summary>
-		public OnFrameworkStepError OnError { get; set; }
-		/// <summary>
-		/// Number of times to retry the step when RetryStep is set or job when RetryJob is set
-		/// </summary>
-		public int RetryTimes { get; set; }
-		/// <summary>
-		/// How much time to wait before retrying a step or a job. default is 0
-		/// </summary>
-		public int WaitBetweenRetriesMilliseconds { get; set; }
-		/// <summary>
-		/// Sync or Async mode to execute the step STA|MTA
-		/// </summary>
-		public FrameworkStepRunMode RunMode { get; set; }
-		/// <summary>
-		/// Comma delimited string of all the steps that need to be completed before this step can run
-		/// </summary>
-		public string DependsOn { get; set; }
-		/// <summary>
-		/// Comma delimited string of all the groups that need to be completed before this step can run
-		/// </summary>
-		public string DependsOnGroup { get; set; }
-		/// <summary>
-		/// When DependsOn is set, indicates the maximum amount of time to wait
-		/// </summary>
-		public int WaitForDependsOnMilliseconds { get; set; }
-		/// <summary>
-		/// Used for Impersonation. Executes a step as a user. Only works in STA mode
-		/// </summary>
-		public string RunAsDomain { get; set; }
-		/// <summary>
-		/// Used for Impersonation. Executes a step as a user. Only works in STA mode
-		/// </summary>
-		public string RunAsUser { get; set; }
-		/// <summary>
-		/// Used for Impersonation. Executes a step as a user. Only works in STA mode
-		/// </summary>
-		public string RunAsPassword { get; set; }
+public enum FrameworkStepRunStatus
+{
+    Loaded,
+    Waiting,
+    Complete,
+    CompleteWithErrors,
+}
 
-		#endregion
+/// <summary>
+/// A single framework step.
+/// </summary>
+public class ProcessorStep
+{
+    #region Config
+    public string StepName { get; set; } = string.Empty;
+    public string Group { get; set; } = string.Empty;
+    public string InvokeClass { get; set; } = string.Empty;
+    public OnFrameworkStepError OnError { get; set; } = OnFrameworkStepError.Skip;
+    public int RetryTimes { get; set; }
+    public int WaitBetweenRetriesMilliseconds { get; set; }
 
-		#region Runtime
-		/// <summary>
-		/// The run status Loaded|Waiting|Complete|CompleteWithErrors
-		/// </summary>
-		public FrameworkStepRunStatus RunStatus { get; set; }
-		/// <summary>
-		/// The time in miliseconds this step was in the current RunStatus.
-		/// Used for Waiting for other steps to finish
-		/// </summary>
-		public int RunStatusTime { get; set; }
-		#endregion
+    /// <summary>Synchronous (inline) or FireAndForget (background task).</summary>
+    public StepExecutionMode RunMode { get; set; } = StepExecutionMode.Synchronous;
 
-		#region Log
-		/// <summary>
-		///  The step ID in table JobStep
-		/// </summary>
-		public int FrameworkJobStepID { get; set; }
-		public int FrameworkJobID { get; set; }
-		public DateTime? CreatedDate { get; set; }
-		public DateTime? StartDate { get; set; }
-		public DateTime? EndDate { get; set; }
-		public string ExitMessage { get; set; }
-		public bool Active { get; set; }
-		#endregion
+    public string DependsOn { get; set; } = string.Empty;
+    public string DependsOnGroup { get; set; } = string.Empty;
+    public int WaitForDependsOnMilliseconds { get; set; } = int.MaxValue;
 
-		public ProcessorStep()
-		{
-			StepName = string.Empty;
-			Group = string.Empty;
-			InvokeClass = string.Empty;
-			OnError = OnFrameworkStepError.Skip;
-			RetryTimes = 0;
-			RunMode = FrameworkStepRunMode.STA;
-			DependsOn = string.Empty;
-			DependsOnGroup = string.Empty;
-			WaitForDependsOnMilliseconds = int.MaxValue;
-			RunStatus = FrameworkStepRunStatus.Loaded;
-			RunStatusTime = 0;
-			FrameworkJobStepID = -1;
-			FrameworkJobID = -1;
-			CreatedDate = null;
-			StartDate = null;
-			EndDate = null;
-			Active = true;
-		}
-	}
+    /// <summary>Used for impersonation (Windows-only). Only honoured in <see cref="StepExecutionMode.Synchronous"/>.</summary>
+    public string RunAsDomain { get; set; } = string.Empty;
+    /// <summary>Used for impersonation (Windows-only). Only honoured in <see cref="StepExecutionMode.Synchronous"/>.</summary>
+    public string RunAsUser { get; set; } = string.Empty;
+    /// <summary>Used for impersonation (Windows-only). Only honoured in <see cref="StepExecutionMode.Synchronous"/>.</summary>
+    public string RunAsPassword { get; set; } = string.Empty;
+    #endregion
+
+    #region Runtime
+    public FrameworkStepRunStatus RunStatus { get; set; } = FrameworkStepRunStatus.Loaded;
+    public int RunStatusTime { get; set; }
+    #endregion
+
+    #region Log
+    public int FrameworkJobStepID { get; set; } = -1;
+    public int FrameworkJobID { get; set; } = -1;
+    public DateTime? CreatedDate { get; set; }
+    public DateTime? StartDate { get; set; }
+    public DateTime? EndDate { get; set; }
+    public string ExitMessage { get; set; } = string.Empty;
+    public bool Active { get; set; } = true;
+    #endregion
+
+    public ProcessorStep DeepCopy() => new()
+    {
+        StepName = StepName,
+        Group = Group,
+        InvokeClass = InvokeClass,
+        OnError = OnError,
+        RetryTimes = RetryTimes,
+        WaitBetweenRetriesMilliseconds = WaitBetweenRetriesMilliseconds,
+        RunMode = RunMode,
+        DependsOn = DependsOn,
+        DependsOnGroup = DependsOnGroup,
+        WaitForDependsOnMilliseconds = WaitForDependsOnMilliseconds,
+        RunAsDomain = RunAsDomain,
+        RunAsUser = RunAsUser,
+        RunAsPassword = RunAsPassword,
+        RunStatus = RunStatus,
+        RunStatusTime = RunStatusTime,
+        FrameworkJobStepID = FrameworkJobStepID,
+        FrameworkJobID = FrameworkJobID,
+        CreatedDate = CreatedDate,
+        StartDate = StartDate,
+        EndDate = EndDate,
+        ExitMessage = ExitMessage,
+        Active = Active,
+    };
 }

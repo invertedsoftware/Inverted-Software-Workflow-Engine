@@ -1,0 +1,56 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0     # for SourceLink
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Compute version
+        id: vars
+        run: echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+
+      - name: Restore
+        run: dotnet restore InvertedSoftware.WorkflowEngine.sln
+
+      - name: Pack
+        run: |
+          for proj in \
+            InvertedSoftware.ExecutionEngine \
+            InvertedSoftware.WorkflowEngine.Queue.Abstractions \
+            InvertedSoftware.WorkflowEngine.Queue.Serialization \
+            InvertedSoftware.WorkflowEngine.Queue.InMemory \
+            InvertedSoftware.WorkflowEngine.Queue.RabbitMq \
+            InvertedSoftware.WorkflowEngine.Queue.Kafka \
+            InvertedSoftware.WorkflowEngine.Queue.AzureServiceBus; do
+            dotnet pack "$proj" --configuration Release --output ./artifacts \
+              -p:Version=${{ steps.vars.outputs.version }} \
+              -p:ContinuousIntegrationBuild=true
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: ./artifacts/*.*nupkg
+
+      - name: Push to NuGet
+        if: env.NUGET_API_KEY != ''
+        env:
+          NUGET_API_KEY: ${{ secrets.NUGET_API_KEY }}
+        run: |
+          dotnet nuget push ./artifacts/*.nupkg \
+            --api-key "$NUGET_API_KEY" \
+            --source https://api.nuget.org/v3/index.json \
+            --skip-duplicate

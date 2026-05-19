@@ -1,25 +1,14 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+// Copyright (c) Inverted Software. All rights reserved.
 
-namespace InvertedSoftware.WorkflowEngine.Messages
+namespace InvertedSoftware.WorkflowEngine.Messages;
+
+/// <summary>
+/// Marker interface for messages enqueued onto a workflow queue. Any message
+/// posted through <c>FrameworkManager.AddFrameworkJobAsync</c> must implement
+/// this interface.
+/// </summary>
+public interface IWorkflowMessage
 {
-	/// <summary>
-	/// The interface for framework messages,
-	/// Any message dropped into a framework Queue must implement this interface
-	/// </summary>
-	public interface IWorkflowMessage
-	{
-		/// <summary>
-		/// The database Job ID
-		/// </summary>
-		int JobID { get; set; }
-	}
+    /// <summary>The job ID. Negative values indicate a re-run (dependency checks skipped).</summary>
+    int JobID { get; set; }
 }

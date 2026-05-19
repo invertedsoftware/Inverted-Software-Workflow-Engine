@@ -1,12 +1,30 @@
-﻿<Workflow>
-	<Job Name="ExampleJob" MessageClass="ExampleMessage" NotifyComplete="true" MaxRunTimeMilliseconds="36000000">
+<Workflow>
+	<Job Name="ExampleJob" MessageClass="ExampleMessage" NotifyComplete="true" MaxRunTimeMilliseconds="36000000" MessageQueueType="Transactional">
 		<Queues>
-			<Queue MessageQueue=".\Private$\WorkflowEngine.ExampleJob" ErrorQueue=".\Private$\WorkflowEngine.ExampleJobError" PoisonQueue=".\Private$\WorkflowEngine.ExampleJobPoison" CompletedQueue=".\Private$\WorkflowEngine.ExampleJobComplete" MessageQueueType="Transactional"></Queue>
-			<Queue MessageQueue=".\Private$\WorkflowEngine.ExampleJobBackup" ErrorQueue=".\Private$\WorkflowEngine.ExampleJobErrorBackup" PoisonQueue=".\Private$\WorkflowEngine.ExampleJobPoisonBackup" CompletedQueue=".\Private$\WorkflowEngine.ExampleJobCompleteBackup" MessageQueueType="Transactional"></Queue>
+			<!--
+			In v2 the queue strings are LOGICAL names. The provider's Mappings option
+			translates them to broker-native resources (RabbitMQ exchange/queue, Kafka
+			topic, ASB queue). The legacy MSMQ paths (.\Private$\...) are no longer used.
+			-->
+			<Queue MessageQueue="ExampleJob.Main"
+			       ErrorQueue="ExampleJob.Error"
+			       PoisonQueue="ExampleJob.Poison"
+			       CompletedQueue="ExampleJob.Completed"
+			       MessageQueueType="Transactional" />
 		</Queues>
 		<Steps>
-			<Step Name="CopyFiles" Group="group1" InvokeClass="InvertedSoftware.WorkflowEngine.Steps.CopyFiles" OnError="Exit" RetryTimes="3" WaitBetweenRetriesMilliseconds="5000" RunMode="STA" DependsOn="" DependsOnGroup="" WaitForDependsOnMilliseconds="" RunAsDomain="" RunAsUser="" RunAsPassword=""></Step>
-			<Step Name="RenameFiles" Group="group1" InvokeClass="InvertedSoftware.WorkflowEngine.Steps.RenameFiles" OnError="Exit" RetryTimes="3" WaitBetweenRetriesMilliseconds="5000" RunMode="STA" DependsOn="CopyFiles" DependsOnGroup="" WaitForDependsOnMilliseconds="" RunAsDomain="" RunAsUser="" RunAsPassword=""></Step>
+			<Step Name="CopyFiles" Group="group1"
+			      InvokeClass="InvertedSoftware.WorkflowEngine.Steps.CopyFiles"
+			      OnError="Exit" RetryTimes="3" WaitBetweenRetriesMilliseconds="5000"
+			      RunMode="Synchronous" DependsOn="" DependsOnGroup=""
+			      WaitForDependsOnMilliseconds=""
+			      RunAsDomain="" RunAsUser="" RunAsPassword="" />
+			<Step Name="RenameFiles" Group="group1"
+			      InvokeClass="InvertedSoftware.WorkflowEngine.Steps.RenameFiles"
+			      OnError="Exit" RetryTimes="3" WaitBetweenRetriesMilliseconds="5000"
+			      RunMode="Synchronous" DependsOn="CopyFiles" DependsOnGroup=""
+			      WaitForDependsOnMilliseconds=""
+			      RunAsDomain="" RunAsUser="" RunAsPassword="" />
 		</Steps>
 	</Job>
 </Workflow>

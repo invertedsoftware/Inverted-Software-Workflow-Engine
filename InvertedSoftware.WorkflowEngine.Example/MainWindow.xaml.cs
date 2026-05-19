@@ -1,102 +1,90 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Windows;
-using System.Windows.Controls;
-using System.Windows.Data;
-using System.Windows.Documents;
-using System.Windows.Input;
-using System.Windows.Media;
-using System.Windows.Media.Imaging;
-using System.Windows.Navigation;
-using System.Windows.Shapes;
+// Copyright (c) Inverted Software. All rights reserved.
+
 using System.IO;
-using System.Threading;
-
+using System.Windows;
+using InvertedSoftware.WorkflowEngine.Config;
 using InvertedSoftware.WorkflowEngine.Messages;
-using System.Threading.Tasks;
+using InvertedSoftware.WorkflowEngine.Queue.InMemory;
+using InvertedSoftware.WorkflowEngine.Queue.Serialization;
+using InvertedSoftware.WorkflowEngine.Steps;
+using Microsoft.Extensions.Configuration;
 
-namespace InvertedSoftware.WorkflowEngine.Example
+namespace InvertedSoftware.WorkflowEngine.Example;
+
+/// <summary>
+/// WPF demo. Uses the in-memory queue provider so the demo runs without any
+/// external broker — swap for RabbitMQ / Kafka / Azure Service Bus by changing
+/// the provider construction below.
+/// </summary>
+public partial class MainWindow : Window
 {
-	/// <summary>
-	/// Interaction logic for MainWindow.xaml
-	/// </summary>
-	public partial class MainWindow : Window
-	{
-		public Processor frameworkProcessor;
-		public bool isSoftStop;
-		public string JobName = "ExampleJob";
+    private readonly WorkflowEngineHost _host;
+    private readonly Processor _processor;
+    private const string JobName = "ExampleJob";
 
-		public MainWindow()
-		{
-			InitializeComponent();
-			LoadWorkflow();
-			frameworkProcessor = new Processor();
-			isSoftStop = false;
-		}
+    public MainWindow()
+    {
+        InitializeComponent();
 
-		private void LoadWorkflow()
-		{
-			WorkflowTextBox.Text = File.ReadAllText(WorkflowEngine.Config.EngineConfiguration.FrameworkConfigLocation);
-		}
+        var configRoot = new ConfigurationBuilder()
+            .SetBasePath(AppContext.BaseDirectory)
+            .AddJsonFile("appsettings.json", optional: false)
+            .Build();
+        var options = configRoot.GetSection("WorkflowEngine").Get<EngineOptions>() ?? new EngineOptions();
 
-		/// <summary>
-		/// Start the framework
-		/// </summary>
-		/// <param name="sender"></param>
-		/// <param name="e"></param>
-		private void button1_Click(object sender, RoutedEventArgs e)
-		{
-			Task.Factory.StartNew(() =>
-			{
-				try
-				{
-					frameworkProcessor.StartFramework(JobName);
-				}
-				catch (Exception ex)
-				{
-					MessageBox.Show("Framework Error." + ex.Message);
-				}
-			});
-		}
+        var stepFactory = new TypeNameStepFactory()
+            .Register<CopyFiles>("InvertedSoftware.WorkflowEngine.Steps.CopyFiles", () => new CopyFiles())
+            .Register<RenameFiles>("InvertedSoftware.WorkflowEngine.Steps.RenameFiles", () => new RenameFiles());
 
-		/// <summary>
-		/// Drop a request message in the queue
-		/// </summary>
-		/// <param name="sender"></param>
-		/// <param name="e"></param>
-        private void button2_Click(object sender, RoutedEventArgs e)
+        _host = new WorkflowEngineHost(
+            queueProvider: new InMemoryQueueProvider(),
+            serializer: new JsonMessageSerializer(),
+            stepFactory: stepFactory,
+            options: options);
+
+        _processor = _host.CreateProcessor();
+        LoadWorkflow();
+    }
+
+    private void LoadWorkflow()
+    {
+        WorkflowTextBox.Text = File.ReadAllText(_host.Options.FrameworkConfigLocation);
+    }
+
+    private void button1_Click(object sender, RoutedEventArgs e)
+    {
+        Task.Run(async () =>
         {
             try
             {
-                ExampleMessage message = new ExampleMessage()
-                    {
-                        CopyFilesFrom = @"C:\FrameworkTest\Source\",
-                        CopyFilesTo = @"C:\FrameworkTest\Destination\"
-                    };
-                FrameworkManager.AddFrameworkJob(JobName, message);
+                await _processor.StartFrameworkAsync(JobName);
             }
             catch (Exception ex)
             {
-                MessageBox.Show(ex.ToString());
+                Dispatcher.Invoke(() => MessageBox.Show("Framework Error: " + ex.Message));
             }
-        }
+        });
+    }
 
-		/// <summary>
-		/// Stop the framework
-		/// </summary>
-		/// <param name="sender"></param>
-		/// <param name="e"></param>
-		private void button3_Click(object sender, RoutedEventArgs e)
-		{
-			frameworkProcessor.StopFramework(isSoftStop);
-		}
-	}
+    private async void button2_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            var message = new ExampleMessage
+            {
+                CopyFilesFrom = @"C:\FrameworkTest\Source\",
+                CopyFilesTo = @"C:\FrameworkTest\Destination\",
+            };
+            await FrameworkManager.AddFrameworkJobAsync(JobName, message);
+        }
+        catch (Exception ex)
+        {
+            MessageBox.Show(ex.ToString());
+        }
+    }
+
+    private async void button3_Click(object sender, RoutedEventArgs e)
+    {
+        await _processor.StopFrameworkAsync(isSoftExit: true);
+    }
 }

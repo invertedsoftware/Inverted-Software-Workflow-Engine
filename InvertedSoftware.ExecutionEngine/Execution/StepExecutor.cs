@@ -1,111 +1,192 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading;
+// Copyright (c) Inverted Software. All rights reserved.
 
-using InvertedSoftware.WorkflowEngine.Messages;
-using InvertedSoftware.WorkflowEngine.DataObjects;
-using InvertedSoftware.WorkflowEngine.Steps;
+using System.Diagnostics;
 using InvertedSoftware.WorkflowEngine.Common.Security;
+using InvertedSoftware.WorkflowEngine.DataObjects;
+using InvertedSoftware.WorkflowEngine.Diagnostics;
+using InvertedSoftware.WorkflowEngine.Idempotency;
+using InvertedSoftware.WorkflowEngine.Messages;
+using InvertedSoftware.WorkflowEngine.Queue;
+using InvertedSoftware.WorkflowEngine.Steps;
+using Microsoft.Extensions.Logging;
 
-namespace InvertedSoftware.WorkflowEngine.Execution
+namespace InvertedSoftware.WorkflowEngine.Execution;
+
+/// <summary>
+/// Invokes a single <see cref="IStep"/>. Handles dependency waits, retry policy,
+/// idempotency claiming, telemetry, and (Windows-only) impersonation.
+/// </summary>
+internal sealed class StepExecutor
 {
-    internal class StepExecutor
+    private readonly WorkflowEngineHost _host;
+    private readonly IJobReporter _reporter;
+    private readonly ILogger<StepExecutor> _logger;
+
+    public StepExecutor(WorkflowEngineHost host, IJobReporter reporter)
     {
-        Impersonation impersonate = null;
+        _host = host ?? throw new ArgumentNullException(nameof(host));
+        _reporter = reporter ?? throw new ArgumentNullException(nameof(reporter));
+        _logger = host.CreateLogger<StepExecutor>();
+    }
 
-        public StepExecutor()
-        {
-            impersonate = new Impersonation();
-            impersonate.ImpersonationLogonType = WorkflowEngine.Common.Security.ImpersonationLogonType.LOGON32_LOGON_NEW_CREDENTIALS;
-        }
-        /// <summary>
-        /// Run a workflow step
-        /// </summary>
-        /// <param name="workflowMessage">Message to pass to the step class</param>
-        /// <param name="retryStepTimes">Times to retry on error</param>
-        /// <param name="workflowStep">The step to run</param>
-        internal void RunFrameworkStep(IWorkflowMessage workflowMessage, int retryStepTimes, ProcessorStep workflowStep, ProcessorJob currentJob, bool isCheckDepends)
-        {
-            bool impersonated = false;
-            if (!string.IsNullOrEmpty(workflowStep.RunAsDomain) && !string.IsNullOrEmpty(workflowStep.RunAsUser) && !string.IsNullOrEmpty(workflowStep.RunAsPassword) && workflowStep.RunMode == FrameworkStepRunMode.STA)
-                impersonated = impersonate.ImpersonateValidUser(workflowStep.RunAsUser, workflowStep.RunAsDomain, workflowStep.RunAsPassword);
-            using (IStep step = StepFactory.GetStep(workflowStep.InvokeClass))
-            {
-                try
-                {
-                    workflowStep.RunStatus = FrameworkStepRunStatus.Loaded;
-                    if (isCheckDepends)
-                        WaitForDependents(workflowStep, currentJob);
-                    workflowStep.StartDate = DateTime.Now;
-                    step.RunStep(workflowMessage);
-                    workflowStep.EndDate = DateTime.Now;
-                    workflowStep.RunStatus = FrameworkStepRunStatus.Complete;
-                    workflowStep.ExitMessage = "Complete";
-                }
-                catch (Exception e)
-                {
-                    workflowStep.RunStatus = FrameworkStepRunStatus.CompleteWithErrors;
-                    workflowStep.ExitMessage = e.Message;
-                    while (e.InnerException != null)
-                    {
-                        e = e.InnerException;
-                        workflowStep.ExitMessage += '|' + e.Message;
-                    }
-                    switch (workflowStep.OnError)
-                    {
-                        case OnFrameworkStepError.RetryStep:
-                            if (workflowStep.WaitBetweenRetriesMilliseconds > 0)
-                                Thread.Sleep(workflowStep.WaitBetweenRetriesMilliseconds);
-                            // Try the step again
-                            retryStepTimes++;
-                            if (retryStepTimes <= workflowStep.RetryTimes)
-                                RunFrameworkStep(workflowMessage, retryStepTimes, workflowStep, currentJob, isCheckDepends);
-                            break;
-                        default:
-                            // If this is running from a thread, do not throw the error up
-                            if (workflowStep.RunMode == FrameworkStepRunMode.STA)
-                                throw e;
-                            else
-                                Processor.ReportJobError(e, workflowStep, workflowMessage, currentJob);
-                            break;
-                    }
-                }
-            }
+    internal async Task RunFrameworkStepAsync(
+        IWorkflowMessage workflowMessage,
+        int retryStepTimes,
+        ProcessorStep workflowStep,
+        ProcessorJob currentJob,
+        bool isCheckDepends,
+        CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
 
-            if (impersonated)
-                impersonate.UndoImpersonation();
+        var needsImpersonation =
+            !string.IsNullOrEmpty(workflowStep.RunAsDomain) &&
+            !string.IsNullOrEmpty(workflowStep.RunAsUser) &&
+            !string.IsNullOrEmpty(workflowStep.RunAsPassword) &&
+            workflowStep.RunMode == StepExecutionMode.Synchronous;
+
+        if (needsImpersonation && !OperatingSystem.IsWindows())
+        {
+            throw new PlatformNotSupportedException(
+                $"Step '{workflowStep.StepName}' specifies RunAsUser, which requires Windows.");
         }
 
-        /// <summary>
-        /// Block untill all steps and groups this step depends on have finished
-        /// </summary>
-        /// <param name="workflowStep"></param>
-        private void WaitForDependents(ProcessorStep workflowStep, ProcessorJob currentJob)
+        // Idempotency check — skip already-completed steps under at-least-once redelivery.
+        var claim = new IdempotencyClaim(currentJob.JobName, workflowStep.StepName, workflowMessage.JobID);
+        var shouldRun = await _host.IdempotencyStore.TryClaimAsync(claim, cancellationToken).ConfigureAwait(false);
+        if (!shouldRun)
         {
-            if (string.IsNullOrEmpty(workflowStep.DependsOn) &&
-                string.IsNullOrEmpty(workflowStep.DependsOnGroup))
-                return;
+            Log.StepSkippedIdempotent(_logger, currentJob.JobName, workflowMessage.JobID, workflowStep.StepName);
+            workflowStep.RunStatus = FrameworkStepRunStatus.Complete;
+            workflowStep.ExitMessage = "Skipped: idempotency store reports already completed.";
+            WorkflowTelemetry.StepDuration.Record(0,
+                new KeyValuePair<string, object?>("job", currentJob.JobName),
+                new KeyValuePair<string, object?>("step", workflowStep.StepName),
+                new KeyValuePair<string, object?>("outcome", "skipped"));
+            return;
+        }
 
-            var result = from ProcessorStep in currentJob.WorkFlowSteps
-                         where ProcessorStep.RunStatus != FrameworkStepRunStatus.Complete &&
-                         (workflowStep.DependsOn.Split(',').Contains(ProcessorStep.StepName) ||
-                         workflowStep.DependsOnGroup.Split(',').Contains(ProcessorStep.Group))
-                         select ProcessorStep;
-            if (result.Count() > 0) //There are still steps to wait for
+        using var stepActivity = WorkflowTelemetry.ActivitySource.StartActivity(
+            Telemetry.Activities.Step, ActivityKind.Internal);
+        stepActivity?.SetTag(Telemetry.Tags.JobName, currentJob.JobName);
+        stepActivity?.SetTag(Telemetry.Tags.JobId, workflowMessage.JobID);
+        stepActivity?.SetTag(Telemetry.Tags.StepName, workflowStep.StepName);
+
+        using IStep step = _host.StepFactory.GetStep(workflowStep.InvokeClass);
+        var stopwatch = Stopwatch.StartNew();
+        var outcome = "complete";
+
+        try
+        {
+            workflowStep.RunStatus = FrameworkStepRunStatus.Loaded;
+            if (isCheckDepends)
+                await WaitForDependentsAsync(workflowStep, currentJob, cancellationToken).ConfigureAwait(false);
+
+            workflowStep.StartDate = DateTime.UtcNow;
+            Log.StepStarting(_logger, currentJob.JobName, workflowMessage.JobID, workflowStep.StepName);
+
+            if (needsImpersonation && OperatingSystem.IsWindows())
             {
-                Thread.Sleep(100);
-                workflowStep.RunStatusTime += 100;
-                if (workflowStep.RunStatusTime <= workflowStep.WaitForDependsOnMilliseconds)
-                    WaitForDependents(workflowStep, currentJob);
+                var imp = new Impersonation
+                {
+                    ImpersonationLogonType = ImpersonationLogonType.LOGON32_LOGON_NEW_CREDENTIALS,
+                };
+                imp.RunAs(workflowStep.RunAsUser, workflowStep.RunAsDomain, workflowStep.RunAsPassword,
+                    () => step.RunStep(workflowMessage, cancellationToken));
             }
+            else
+            {
+                step.RunStep(workflowMessage, cancellationToken);
+            }
+
+            workflowStep.EndDate = DateTime.UtcNow;
+            workflowStep.RunStatus = FrameworkStepRunStatus.Complete;
+            workflowStep.ExitMessage = "Complete";
+
+            await _host.IdempotencyStore.MarkCompletedAsync(claim, cancellationToken).ConfigureAwait(false);
+
+            stopwatch.Stop();
+            Log.StepCompleted(_logger, currentJob.JobName, workflowMessage.JobID, workflowStep.StepName, stopwatch.ElapsedMilliseconds);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            outcome = "cancelled";
+            workflowStep.RunStatus = FrameworkStepRunStatus.CompleteWithErrors;
+            workflowStep.ExitMessage = "Cancelled (deadline exceeded or shutdown).";
+            stepActivity?.SetStatus(ActivityStatusCode.Error, "cancelled");
+            throw;
+        }
+        catch (Exception e)
+        {
+            outcome = "error";
+            workflowStep.RunStatus = FrameworkStepRunStatus.CompleteWithErrors;
+            workflowStep.ExitMessage = e.Message;
+            stepActivity?.SetStatus(ActivityStatusCode.Error, e.Message);
+
+            var inner = e.InnerException;
+            while (inner is not null)
+            {
+                workflowStep.ExitMessage += $"|{inner.Message}";
+                inner = inner.InnerException;
+            }
+
+            Log.StepFailed(_logger, e, currentJob.JobName, workflowMessage.JobID, workflowStep.StepName,
+                retryStepTimes + 1, workflowStep.RetryTimes);
+
+            switch (workflowStep.OnError)
+            {
+                case OnFrameworkStepError.RetryStep:
+                    if (workflowStep.WaitBetweenRetriesMilliseconds > 0)
+                        await Task.Delay(workflowStep.WaitBetweenRetriesMilliseconds, cancellationToken).ConfigureAwait(false);
+                    retryStepTimes++;
+                    if (retryStepTimes <= workflowStep.RetryTimes)
+                        await RunFrameworkStepAsync(workflowMessage, retryStepTimes, workflowStep, currentJob, isCheckDepends, cancellationToken).ConfigureAwait(false);
+                    break;
+                default:
+                    // Inline (Synchronous) steps propagate the error up to the job executor;
+                    // fire-and-forget steps don't have anybody to throw to, so report directly.
+                    if (workflowStep.RunMode == StepExecutionMode.Synchronous)
+                        throw;
+                    await _reporter.ReportJobErrorAsync(e, workflowStep, workflowMessage, currentJob, cancellationToken).ConfigureAwait(false);
+                    break;
+            }
+        }
+        finally
+        {
+            stopwatch.Stop();
+            stepActivity?.SetTag(Telemetry.Tags.StepOutcome, outcome);
+            WorkflowTelemetry.StepDuration.Record(stopwatch.Elapsed.TotalSeconds,
+                new KeyValuePair<string, object?>("job", currentJob.JobName),
+                new KeyValuePair<string, object?>("step", workflowStep.StepName),
+                new KeyValuePair<string, object?>("outcome", outcome));
+        }
+    }
+
+    private static async Task WaitForDependentsAsync(ProcessorStep workflowStep, ProcessorJob currentJob, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(workflowStep.DependsOn) && string.IsNullOrEmpty(workflowStep.DependsOnGroup))
+            return;
+
+        var dependsOnSteps = workflowStep.DependsOn.Split(',', StringSplitOptions.RemoveEmptyEntries);
+        var dependsOnGroups = workflowStep.DependsOnGroup.Split(',', StringSplitOptions.RemoveEmptyEntries);
+
+        var waited = 0;
+        const int pollMs = 100;
+
+        while (true)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            var anyPending = currentJob.WorkFlowSteps.Any(s =>
+                s.RunStatus != FrameworkStepRunStatus.Complete &&
+                (dependsOnSteps.Contains(s.StepName) || dependsOnGroups.Contains(s.Group)));
+
+            if (!anyPending) return;
+            if (waited > workflowStep.WaitForDependsOnMilliseconds) return;
+
+            await Task.Delay(pollMs, cancellationToken).ConfigureAwait(false);
+            waited += pollMs;
+            workflowStep.RunStatusTime += pollMs;
         }
     }
 }

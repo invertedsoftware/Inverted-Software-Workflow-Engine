@@ -1,76 +1,85 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading;
-using System.Threading.Tasks;
+// Copyright (c) Inverted Software. All rights reserved.
 
-using InvertedSoftware.WorkflowEngine.Messages;
 using InvertedSoftware.WorkflowEngine.DataObjects;
-using InvertedSoftware.WorkflowEngine.Common.Exceptions;
+using InvertedSoftware.WorkflowEngine.Messages;
 
-namespace InvertedSoftware.WorkflowEngine.Execution
+namespace InvertedSoftware.WorkflowEngine.Execution;
+
+/// <summary>
+/// Executor that runs each step strictly in order. Default on single-core hosts
+/// and when <c>EngineOptions.UsePipelinedOnMulticore = false</c>.
+/// </summary>
+internal sealed class SequentialExecutor : IExecutor
 {
-    internal class SequentialExecutor : IExecutor
+    private readonly StepExecutor _stepExecutor;
+    private readonly IJobReporter _reporter;
+
+    public ProcessorJob ProcessorJob { get; set; } = new();
+
+    public SequentialExecutor(WorkflowEngineHost host, IJobReporter reporter)
     {
-        private StepExecutor stepExecutor = null;
-        public ProcessorJob ProcessorJob { get; set; }
+        _stepExecutor = new StepExecutor(host, reporter);
+        _reporter = reporter;
+    }
 
-        public SequentialExecutor()
+    public async Task RunFrameworkJobAsync(
+        IWorkflowMessage workflowMessage,
+        int retryJobTimes,
+        bool isCheckDepends,
+        CancellationToken cancellationToken)
+    {
+        var currentJob = ProcessorJob.DeepCopy();
+
+        foreach (var workflowStep in currentJob.WorkFlowSteps)
         {
-            stepExecutor = new StepExecutor();
-        }
-
-        /// <summary>
-        /// Runs a framework job
-        /// </summary>
-        /// <param name="workflowMessage">The Queue message</param>
-        /// <param name="retryJobTimes">Times to retry the job or steps</param>
-        public void RunFrameworkJob(IWorkflowMessage workflowMessage, int retryJobTimes, bool isCheckDepends)
-        {
-            // For each job, open a new ProcessorJob to keep track of logging
-            ProcessorJob currentJob = (ProcessorJob)ProcessorJob.Clone();
-
-            foreach (ProcessorStep workflowStep in currentJob.WorkFlowSteps)
+            cancellationToken.ThrowIfCancellationRequested();
+            try
             {
-                try
+                workflowStep.RunStatus = FrameworkStepRunStatus.Waiting;
+                if (workflowStep.RunMode == StepExecutionMode.Synchronous)
                 {
-                    int retryStepTimes = 0;
-                    workflowStep.RunStatus = FrameworkStepRunStatus.Waiting;
-                    if (workflowStep.RunMode == FrameworkStepRunMode.STA)
-                        stepExecutor.RunFrameworkStep(workflowMessage, retryStepTimes, workflowStep, currentJob, isCheckDepends);
-                    else if (workflowStep.RunMode == FrameworkStepRunMode.MTA)
-                        Task.Factory.StartNew(() => stepExecutor.RunFrameworkStep(workflowMessage, retryStepTimes, workflowStep, currentJob, isCheckDepends));
+                    await _stepExecutor.RunFrameworkStepAsync(
+                        workflowMessage, retryStepTimes: 0, workflowStep, currentJob, isCheckDepends, cancellationToken)
+                        .ConfigureAwait(false);
                 }
-                catch (Exception e)
+                else // FireAndForget
                 {
-                    WorkflowException exception = new WorkflowException("Error in framework step " + workflowStep.StepName, e);
-                    workflowStep.ExitMessage = e.Message;
-                    switch (workflowStep.OnError)
-                    {
-                        case OnFrameworkStepError.RetryJob:
-                            if (workflowStep.WaitBetweenRetriesMilliseconds > 0)
-                                Thread.Sleep(workflowStep.WaitBetweenRetriesMilliseconds);
-                            retryJobTimes++;
-                            Processor.ReportJobError(e, workflowStep, workflowMessage, currentJob);
-                            // Try the job again
-                            if (retryJobTimes <= workflowStep.RetryTimes)
-                                RunFrameworkJob(workflowMessage, retryJobTimes, isCheckDepends);
-                            break;
-                        case OnFrameworkStepError.Skip:
-                            // Skip this step. Doing nothing here will skip it
-                            Processor.ReportJobError(e, workflowStep, workflowMessage, currentJob);
-                            break;
-                        case OnFrameworkStepError.Exit:
-                            // Push to to error queue with the error and exit the job
-                            Processor.ReportJobError(e, workflowStep, workflowMessage, currentJob);
-                            return;
-                    }
+                    _ = Task.Run(() => _stepExecutor.RunFrameworkStepAsync(
+                        workflowMessage, retryStepTimes: 0, workflowStep, currentJob, isCheckDepends, cancellationToken),
+                        cancellationToken);
                 }
             }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception e)
+            {
+                workflowStep.ExitMessage = e.Message;
+                switch (workflowStep.OnError)
+                {
+                    case OnFrameworkStepError.RetryJob:
+                        if (workflowStep.WaitBetweenRetriesMilliseconds > 0)
+                            await Task.Delay(workflowStep.WaitBetweenRetriesMilliseconds, cancellationToken).ConfigureAwait(false);
+                        retryJobTimes++;
+                        await _reporter.ReportJobErrorAsync(e, workflowStep, workflowMessage, currentJob, cancellationToken).ConfigureAwait(false);
+                        if (retryJobTimes <= workflowStep.RetryTimes)
+                            await RunFrameworkJobAsync(workflowMessage, retryJobTimes, isCheckDepends, cancellationToken).ConfigureAwait(false);
+                        return;
+                    case OnFrameworkStepError.Skip:
+                        await _reporter.ReportJobErrorAsync(e, workflowStep, workflowMessage, currentJob, cancellationToken).ConfigureAwait(false);
+                        break;
+                    case OnFrameworkStepError.Exit:
+                        await _reporter.ReportJobErrorAsync(e, workflowStep, workflowMessage, currentJob, cancellationToken).ConfigureAwait(false);
+                        return;
+                }
+            }
+        }
 
-            // If all steps ran without error report successful job compilation
-            Processor.ReportJobComplete(workflowMessage, currentJob);
+        if (currentJob.NotifyComplete &&
+            currentJob.WorkFlowSteps.All(s => s.RunStatus == FrameworkStepRunStatus.Complete))
+        {
+            await _reporter.ReportJobCompleteAsync(workflowMessage, currentJob, cancellationToken).ConfigureAwait(false);
         }
     }
 }

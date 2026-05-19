@@ -1,0 +1,22 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <RootNamespace>InvertedSoftware.WorkflowEngine.Queue.Serialization</RootNamespace>
+    <AssemblyName>InvertedSoftware.WorkflowEngine.Queue.Serialization</AssemblyName>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>2.0.0</Version>
+    <Description>JSON message serializer for InvertedSoftware.WorkflowEngine.Queue.</Description>
+    <Authors>Inverted Software</Authors>
+    <PackageId>InvertedSoftware.WorkflowEngine.Queue.Serialization</PackageId>
+    <IsPackable>true</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\InvertedSoftware.WorkflowEngine.Queue.Abstractions\InvertedSoftware.WorkflowEngine.Queue.Abstractions.csproj" />
+  </ItemGroup>
+
+</Project>

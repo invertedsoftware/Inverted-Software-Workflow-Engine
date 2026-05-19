@@ -1,127 +1,77 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Security.Principal;
+// Copyright (c) Inverted Software. All rights reserved.
+// Original P/Invoke pattern based on https://support.microsoft.com/kb/306158
+
 using System.Runtime.InteropServices;
+using System.Runtime.Versioning;
+using System.Security.Principal;
+using Microsoft.Win32.SafeHandles;
 
-namespace InvertedSoftware.WorkflowEngine.Common.Security
+namespace InvertedSoftware.WorkflowEngine.Common.Security;
+
+public enum ImpersonationLogonType
 {
-	public enum ImpersonationLogonType
-	{
-		LOGON32_LOGON_INTERACTIVE = 2,
-		LOGON32_LOGON_NETWORK = 3,
-		LOGON32_LOGON_BATCH = 4,
-		LOGON32_LOGON_SERVICE = 5,
-		LOGON32_LOGON_UNLOCK = 7,
-		LOGON32_LOGON_NETWORK_CLEARTEXT = 8,
-		LOGON32_LOGON_NEW_CREDENTIALS = 9
-	}
+    LOGON32_LOGON_INTERACTIVE = 2,
+    LOGON32_LOGON_NETWORK = 3,
+    LOGON32_LOGON_BATCH = 4,
+    LOGON32_LOGON_SERVICE = 5,
+    LOGON32_LOGON_UNLOCK = 7,
+    LOGON32_LOGON_NETWORK_CLEARTEXT = 8,
+    LOGON32_LOGON_NEW_CREDENTIALS = 9,
+}
 
-	public enum ImpersonationProviderType
-	{
-		LOGON32_PROVIDER_DEFAULT = 0,
-		LOGON32_PROVIDER_WINNT50 = 3,
-		LOGON32_PROVIDER_WINNT40 = 2,
-		LOGON32_PROVIDER_WINNT35 = 1
-	}
+public enum ImpersonationProviderType
+{
+    LOGON32_PROVIDER_DEFAULT = 0,
+    LOGON32_PROVIDER_WINNT50 = 3,
+    LOGON32_PROVIDER_WINNT40 = 2,
+    LOGON32_PROVIDER_WINNT35 = 1,
+}
 
-	/// <summary>
-	/// Utility class to help with Impersonation
-	/// </summary>
-	public class Impersonation
-	{
-		// Base code from http://support.microsoft.com/kb/306158
+/// <summary>
+/// Windows-only utility for running a delegate as a different user. Replaces the
+/// v1 <c>WindowsIdentity.Impersonate()</c> pattern (removed in net5+) with
+/// <see cref="WindowsIdentity.RunImpersonated(SafeAccessTokenHandle, Action)"/>.
+/// </summary>
+[SupportedOSPlatform("windows")]
+public sealed partial class Impersonation
+{
+    public ImpersonationLogonType ImpersonationLogonType { get; set; } = ImpersonationLogonType.LOGON32_LOGON_INTERACTIVE;
+    public ImpersonationProviderType ImpersonationProviderType { get; set; } = ImpersonationProviderType.LOGON32_PROVIDER_DEFAULT;
 
-		private const int LOGON32_PROVIDER_DEFAULT = 0;
+    [LibraryImport("advapi32.dll", EntryPoint = "LogonUserW", StringMarshalling = StringMarshalling.Utf16, SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool LogonUser(
+        string lpszUserName,
+        string lpszDomain,
+        string lpszPassword,
+        int dwLogonType,
+        int dwLogonProvider,
+        out SafeAccessTokenHandle phToken);
 
-		WindowsImpersonationContext impersonationContext;
+    [LibraryImport("advapi32.dll", SetLastError = true)]
+    [return: MarshalAs(UnmanagedType.Bool)]
+    private static partial bool RevertToSelf();
 
-		public Impersonation()
-		{
-			ImpersonationLogonType = ImpersonationLogonType.LOGON32_LOGON_INTERACTIVE;
-			ImpersonationProviderType = ImpersonationProviderType.LOGON32_PROVIDER_DEFAULT;
-		}
+    /// <summary>
+    /// Run <paramref name="action"/> in the security context of the supplied credentials.
+    /// </summary>
+    /// <exception cref="System.ComponentModel.Win32Exception">Logon failed.</exception>
+    public void RunAs(string userName, string domain, string password, Action action)
+    {
+        ArgumentNullException.ThrowIfNull(action);
 
-		[DllImport("advapi32.dll")]
-		private static extern int LogonUserA(String lpszUserName,
-			String lpszDomain,
-			String lpszPassword,
-			int dwLogonType,
-			int dwLogonProvider,
-			ref IntPtr phToken);
+        if (!RevertToSelf())
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(), "RevertToSelf failed.");
 
-		[DllImport("advapi32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-		private static extern int DuplicateToken(IntPtr hToken,
-			int impersonationLevel,
-			ref IntPtr hNewToken);
+        if (!LogonUser(userName, domain, password,
+                (int)ImpersonationLogonType, (int)ImpersonationProviderType,
+                out SafeAccessTokenHandle token))
+        {
+            throw new System.ComponentModel.Win32Exception(Marshal.GetLastWin32Error(),
+                $"LogonUser failed for {domain}\\{userName}.");
+        }
 
-		[DllImport("advapi32.dll", CharSet = CharSet.Auto, SetLastError = true)]
-		private static extern bool RevertToSelf();
-
-		[DllImport("kernel32.dll", CharSet = CharSet.Auto)]
-		private static extern bool CloseHandle(IntPtr handle);
-
-		/// <summary>
-		/// Impersonate a User
-		/// </summary>
-		/// <param name="userName">The User</param>
-		/// <param name="domain">The Domain</param>
-		/// <param name="password">The Password</param>
-		/// <returns>true if impersonation succeeded</returns>
-		public bool ImpersonateValidUser(String userName, String domain, String password)
-		{
-			WindowsIdentity tempWindowsIdentity;
-			IntPtr token = IntPtr.Zero;
-			IntPtr tokenDuplicate = IntPtr.Zero;
-
-			if (RevertToSelf())
-			{
-				if (LogonUserA(userName, domain, password, (int)ImpersonationLogonType,
-					(int)ImpersonationProviderType, ref token) != 0)
-				{
-					if (DuplicateToken(token, 2, ref tokenDuplicate) != 0)
-					{
-						tempWindowsIdentity = new WindowsIdentity(tokenDuplicate);
-						impersonationContext = tempWindowsIdentity.Impersonate();
-						if (impersonationContext != null)
-						{
-							CloseHandle(token);
-							CloseHandle(tokenDuplicate);
-							return true;
-						}
-					}
-				}
-			}
-			if (token != IntPtr.Zero)
-				CloseHandle(token);
-			if (tokenDuplicate != IntPtr.Zero)
-				CloseHandle(tokenDuplicate);
-			return false;
-		}
-
-		/// <summary>
-		/// Stop impersonation and return to the current user
-		/// </summary>
-		public void UndoImpersonation()
-		{
-			impersonationContext.Undo();
-		}
-
-		/// <summary>
-		/// The Logon Type. Default LOGON32_LOGON_INTERACTIVE
-		/// </summary>
-		public ImpersonationLogonType ImpersonationLogonType { get; set; }
-
-		/// <summary>
-		/// The provider type to use. Defaults to LOGON32_PROVIDER_DEFAULT
-		/// </summary>
-		public ImpersonationProviderType ImpersonationProviderType { get; set; }
-	}
+        using (token)
+            WindowsIdentity.RunImpersonated(token, action);
+    }
 }

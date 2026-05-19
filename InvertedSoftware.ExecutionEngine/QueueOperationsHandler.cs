@@ -1,75 +1,92 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading;
-using System.ServiceModel;
-using System.Transactions;
-using System.Messaging;
+// Copyright (c) Inverted Software. All rights reserved.
 
-using InvertedSoftware.WorkflowEngine.DataObjects;
+using InvertedSoftware.WorkflowEngine.Diagnostics;
 using InvertedSoftware.WorkflowEngine.Messages;
+using InvertedSoftware.WorkflowEngine.Queue;
 
-namespace InvertedSoftware.WorkflowEngine
+namespace InvertedSoftware.WorkflowEngine;
+
+/// <summary>
+/// Helpers that translate engine-level "error" and "complete" signals into queue
+/// publish operations. Failures on these secondary publishes are warned and
+/// counted but never re-thrown, so they cannot mask the original step error.
+/// </summary>
+internal static class QueueOperationsHandler
 {
-	/// <summary>
-	/// Handle queue operations
-	/// </summary>
-	public class QueueOperationsHandler
-	{
-		public static void HandleError(MsmqPoisonMessageException error)
-		{
-			ProcessorQueue processorQueue = (ProcessorQueue)error.Data["processorQueue"];
-			MessageQueue poisonQueue = new System.Messaging.MessageQueue(processorQueue.PoisonQueue);
-			MessageQueue errorQueue = new System.Messaging.MessageQueue(processorQueue.ErrorQueue);
+    /// <summary>
+    /// Publish the original message body to the Poison queue and an
+    /// <see cref="WorkflowErrorMessage"/> to the Error queue.
+    /// </summary>
+    internal static async Task HandleErrorAsync(
+        WorkflowEngineHost host,
+        string jobName,
+        IWorkflowMessage original,
+        WorkflowErrorMessage errorMessage,
+        CancellationToken cancellationToken)
+    {
+        var originalType = original.GetType().FullName ?? original.GetType().Name;
+        var poisonHeaders = new MessageHeaders
+        {
+            ContentType = host.Serializer.ContentType,
+            MessageType = originalType,
+            CorrelationId = original.JobID.ToString(),
+        };
+        var errorHeaders = new MessageHeaders
+        {
+            ContentType = host.Serializer.ContentType,
+            MessageType = typeof(WorkflowErrorMessage).FullName,
+            CorrelationId = original.JobID.ToString(),
+        };
 
-			using (TransactionScope txScope = new TransactionScope(TransactionScopeOption.RequiresNew))
-			{
-				try
-				{
-					// Send the message to the poison and error message queues.
-					poisonQueue.Send((IWorkflowMessage)error.Data["message"], MessageQueueTransactionType.Automatic);
-					errorQueue.Send((WorkflowErrorMessage)error.Data["errorMessage"], MessageQueueTransactionType.Automatic);
-					txScope.Complete();
-				}
-				catch (InvalidOperationException)
-				{
+        var batch = new[]
+        {
+            new OutgoingMessage(new LogicalQueue(jobName, LogicalQueueKind.Poison), host.Serializer.Serialize(original), poisonHeaders),
+            new OutgoingMessage(new LogicalQueue(jobName, LogicalQueueKind.Error),  host.Serializer.Serialize(errorMessage), errorHeaders),
+        };
 
-				}
-				finally
-				{
-					poisonQueue.Dispose();
-					errorQueue.Dispose();
-				}
-			}
-		}
+        try
+        {
+            await host.QueueProvider.PublishBatchAsync(batch, cancellationToken).ConfigureAwait(false);
+        }
+        catch (QueueProviderException e)
+        {
+            // Best-effort: don't mask the original step exception that triggered this handler.
+            // We still surface the failure in logs + metrics so operators see broker outages.
+            Log.SecondaryPublishFailed(host.CreateLogger<WorkflowEngineHost>(), e, jobName, "Error+Poison");
+            WorkflowTelemetry.Errors.Add(1,
+                new KeyValuePair<string, object?>("job", jobName),
+                new KeyValuePair<string, object?>("kind", "secondary_publish"));
+        }
+    }
 
-		public static void HandleComplete(ProcessorQueue processorQueue, IWorkflowMessage message)
-		{
-			MessageQueue completedQueue = new System.Messaging.MessageQueue(processorQueue.CompletedQueue);
+    /// <summary>Publish the original message to the Completed queue.</summary>
+    internal static async Task HandleCompleteAsync(
+        WorkflowEngineHost host,
+        string jobName,
+        IWorkflowMessage message,
+        CancellationToken cancellationToken)
+    {
+        var headers = new MessageHeaders
+        {
+            ContentType = host.Serializer.ContentType,
+            MessageType = message.GetType().FullName,
+            CorrelationId = message.JobID.ToString(),
+        };
 
-			using (TransactionScope txScope = new TransactionScope(TransactionScopeOption.RequiresNew))
-			{
-				try
-				{
-					completedQueue.Send(message, MessageQueueTransactionType.Automatic);
-					txScope.Complete();
-				}
-				catch (InvalidOperationException)
-				{
-
-				}
-				finally
-				{
-					completedQueue.Dispose();
-				}
-			}
-		}
-	}
+        try
+        {
+            await host.QueueProvider.PublishAsync(
+                new LogicalQueue(jobName, LogicalQueueKind.Completed),
+                host.Serializer.Serialize(message),
+                headers,
+                cancellationToken).ConfigureAwait(false);
+        }
+        catch (QueueProviderException e)
+        {
+            Log.SecondaryPublishFailed(host.CreateLogger<WorkflowEngineHost>(), e, jobName, "Completed");
+            WorkflowTelemetry.Errors.Add(1,
+                new KeyValuePair<string, object?>("job", jobName),
+                new KeyValuePair<string, object?>("kind", "secondary_publish"));
+        }
+    }
 }

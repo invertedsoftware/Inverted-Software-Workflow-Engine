@@ -1,0 +1,31 @@
+# Build output
+bin/
+obj/
+out/
+artifacts/
+
+# Visual Studio / Rider
+.vs/
+.idea/
+*.user
+*.suo
+*.userprefs
+*.cache
+
+# NuGet
+*.nupkg
+*.snupkg
+
+# Test result files
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+# Local config overrides
+*.local.json
+appsettings.Development.json
+
+# OS
+.DS_Store
+Thumbs.db

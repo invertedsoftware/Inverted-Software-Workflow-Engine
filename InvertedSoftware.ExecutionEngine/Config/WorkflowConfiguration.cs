@@ -1,153 +1,166 @@
-﻿// THIS CODE AND INFORMATION IS PROVIDED "AS IS" WITHOUT WARRANTY OF ANY KIND,
-// EITHER EXPRESSED OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE IMPLIED
-// WARRANTIES OF MERCHANTABILITY AND/OR FITNESS FOR A PARTICULAR PURPOSE.
-//
-// Copyright (C) Inverted Software(TM). All rights reserved.
-//
-using System;
-using System.Xml;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+// Copyright (c) Inverted Software. All rights reserved.
 
-using InvertedSoftware.WorkflowEngine.DataObjects;
+using System.Xml.Linq;
 using InvertedSoftware.WorkflowEngine.Common;
+using InvertedSoftware.WorkflowEngine.Common.Exceptions;
+using InvertedSoftware.WorkflowEngine.DataObjects;
 
+namespace InvertedSoftware.WorkflowEngine.Config;
 
-namespace InvertedSoftware.WorkflowEngine.Config
+/// <summary>
+/// Loads job and step definitions from <c>Workflow.xml</c>. Replaces the v1
+/// <c>XmlDocument</c>+XPath implementation with LINQ-to-XML.
+/// </summary>
+public sealed class WorkflowConfiguration
 {
-	public class WorkflowConfiguration
-	{
-		/// <summary>
-		/// Load the framework config from workflow.xml
-		/// </summary>
-		internal static void LoadFrameworkConfig(ProcessorJob processorJob)
-		{
-			XmlDocument doc = new XmlDocument();
-			XmlTextReader reader = new XmlTextReader(EngineConfiguration.FrameworkConfigLocation);
-			doc.Load(reader);
-			reader.Close();
-			// Load the job
-			XmlNode jobNode = doc.SelectSingleNode("//Job[@Name='" + processorJob.JobName + "']");
-			processorJob.MessageClass = jobNode.Attributes["MessageClass"].Value;
-			if (jobNode.Attributes["MessageQueue"] != null && !string.IsNullOrEmpty(jobNode.Attributes["MessageQueue"].Value))
-				processorJob.MessageQueue = jobNode.Attributes["MessageQueue"].Value;
-			if (jobNode.Attributes["ErrorQueue"] != null && !string.IsNullOrEmpty(jobNode.Attributes["ErrorQueue"].Value))
-				processorJob.ErrorQueue = jobNode.Attributes["ErrorQueue"].Value;
-			if (jobNode.Attributes["PoisonQueue"] != null && !string.IsNullOrEmpty(jobNode.Attributes["PoisonQueue"].Value))
-				processorJob.PoisonQueue = jobNode.Attributes["PoisonQueue"].Value;
-			if (jobNode.Attributes["CompletedQueue"] != null && !string.IsNullOrEmpty(jobNode.Attributes["CompletedQueue"].Value))
-				processorJob.CompletedQueue = jobNode.Attributes["CompletedQueue"].Value;
-			if (jobNode.Attributes["NotifyComplete"] != null && !string.IsNullOrEmpty(jobNode.Attributes["NotifyComplete"].Value))
-			{
-				bool notifyComplete = false;
-				if (bool.TryParse(jobNode.Attributes["NotifyComplete"].Value, out notifyComplete))
-					processorJob.NotifyComplete = notifyComplete;
-			}
+    private readonly EngineOptions _options;
 
-			if (jobNode.Attributes["MaxRunTimeMilliseconds"] != null && !string.IsNullOrEmpty(jobNode.Attributes["MaxRunTimeMilliseconds"].Value))
-			{
-				int maxRunTimeMilliseconds = 0;
-				if (int.TryParse(jobNode.Attributes["MaxRunTimeMilliseconds"].Value, out maxRunTimeMilliseconds))
-					processorJob.MaxRunTimeMilliseconds = maxRunTimeMilliseconds;
-			}
-			if (jobNode.Attributes["MessageQueueType"] != null && !string.IsNullOrEmpty(jobNode.Attributes["MessageQueueType"].Value))
-				processorJob.MessageQueueType = (MessageQueueType)Enum.Parse(typeof(MessageQueueType), jobNode.Attributes["MessageQueueType"].Value, true);
-			//Load the Queues
-			XmlNode queuesNode = jobNode.SelectSingleNode("//Job[@Name='" + processorJob.JobName + "']/Queues");
-			if (queuesNode != null)
-				LoadJobQueues(processorJob, queuesNode);
-			//Load the steps
-			XmlNode stepsNode = jobNode.SelectSingleNode("//Job[@Name='" + processorJob.JobName + "']/Steps");
-			if (stepsNode != null)
-				LoadJobSteps(processorJob, stepsNode);
-			else // For backwards compatibility
-				LoadJobSteps(processorJob, jobNode);
-		}
+    public WorkflowConfiguration(EngineOptions options)
+    {
+        _options = options ?? throw new ArgumentNullException(nameof(options));
+    }
 
-		/// <summary>
-		/// Load the Job's Queues
-		/// </summary>
-		/// <param name="processorJob">The ProcessorJob to load to</param>
-		/// <param name="queuesNode">The XmlNode to load from</param>
-		private static void LoadJobQueues(ProcessorJob processorJob, XmlNode queuesNode)
-		{
-			foreach (XmlNode queueNode in queuesNode.ChildNodes)
-			{
-				ProcessorQueue processorQueue = new ProcessorQueue();
+    /// <summary>
+    /// Populate <paramref name="processorJob"/> from the configured XML file.
+    /// </summary>
+    /// <exception cref="FrameworkFatalException">
+    /// Thrown when the file is missing, malformed, or contains no <c>Job</c> with the requested name.
+    /// </exception>
+    public void LoadFrameworkConfig(ProcessorJob processorJob)
+    {
+        ArgumentNullException.ThrowIfNull(processorJob);
 
-				if (!string.IsNullOrEmpty(queueNode.Attributes["MessageQueue"].Value)) //Required
-					processorQueue.MessageQueue = queueNode.Attributes["MessageQueue"].Value;
+        var path = ResolvePath(_options.FrameworkConfigLocation);
+        if (!File.Exists(path))
+            throw new FrameworkFatalException(
+                $"Workflow file not found at '{path}' (configured value: '{_options.FrameworkConfigLocation}').");
 
-				if (!string.IsNullOrEmpty(queueNode.Attributes["ErrorQueue"].Value)) //Required
-					processorQueue.ErrorQueue = queueNode.Attributes["ErrorQueue"].Value;
+        XDocument doc;
+        try
+        {
+            doc = XDocument.Load(path);
+        }
+        catch (Exception e)
+        {
+            throw new FrameworkFatalException(
+                $"Failed to parse workflow file '{path}': {e.Message}", e);
+        }
 
-				if (!string.IsNullOrEmpty(queueNode.Attributes["PoisonQueue"].Value)) //Required
-					processorQueue.PoisonQueue = queueNode.Attributes["PoisonQueue"].Value;
+        var jobNode = doc.Descendants("Job")
+            .FirstOrDefault(j => (string?)j.Attribute("Name") == processorJob.JobName)
+            ?? throw new FrameworkFatalException(
+                $"Job '{processorJob.JobName}' not found in workflow file.");
 
-				if (!string.IsNullOrEmpty(queueNode.Attributes["CompletedQueue"].Value)) //Required
-					processorQueue.CompletedQueue = queueNode.Attributes["CompletedQueue"].Value;
-				
-				if (!string.IsNullOrEmpty(queueNode.Attributes["MessageQueueType"].Value)) //Required
-					processorQueue.MessageQueueType = (MessageQueueType)Enum.Parse(typeof(MessageQueueType), queueNode.Attributes["MessageQueueType"].Value, true);
+        processorJob.MessageClass = (string?)jobNode.Attribute("MessageClass") ?? string.Empty;
+        processorJob.MessageQueue = (string?)jobNode.Attribute("MessageQueue") ?? string.Empty;
+        processorJob.ErrorQueue = (string?)jobNode.Attribute("ErrorQueue") ?? string.Empty;
+        processorJob.PoisonQueue = (string?)jobNode.Attribute("PoisonQueue") ?? string.Empty;
+        processorJob.CompletedQueue = (string?)jobNode.Attribute("CompletedQueue") ?? string.Empty;
 
-				processorJob.ProcessorQueues.Add(processorQueue);
-			}
-		}
+        if (bool.TryParse((string?)jobNode.Attribute("NotifyComplete"), out var notifyComplete))
+            processorJob.NotifyComplete = notifyComplete;
 
-		/// <summary>
-		/// Load the Job's steps
-		/// </summary>
-		/// <param name="processorJob">The ProcessorJob to load to</param>
-		/// <param name="queuesNode">The XmlNode to load from</param>
-		private static void LoadJobSteps(ProcessorJob processorJob, XmlNode stepsNode)
-		{
-			foreach (XmlNode stepNode in stepsNode.ChildNodes)
-			{
-				ProcessorStep workFlowStep = new ProcessorStep();
+        if (int.TryParse((string?)jobNode.Attribute("MaxRunTimeMilliseconds"), out var maxMs))
+            processorJob.MaxRunTimeMilliseconds = maxMs;
 
-				if (!string.IsNullOrEmpty(stepNode.Attributes["Name"].Value)) //Required
-					workFlowStep.StepName = stepNode.Attributes["Name"].Value;
-				if (!string.IsNullOrEmpty(stepNode.Attributes["Group"].Value)) //Required
-					workFlowStep.Group = stepNode.Attributes["Group"].Value;
-				if (!string.IsNullOrEmpty(stepNode.Attributes["InvokeClass"].Value)) //Required
-					workFlowStep.InvokeClass = stepNode.Attributes["InvokeClass"].Value;
-				if (stepNode.Attributes["OnError"] != null && !string.IsNullOrEmpty(stepNode.Attributes["OnError"].Value))
-					workFlowStep.OnError = (OnFrameworkStepError)Enum.Parse(typeof(OnFrameworkStepError), stepNode.Attributes["OnError"].Value, true);
-				if (stepNode.Attributes["RetryTimes"] != null && !string.IsNullOrEmpty(stepNode.Attributes["RetryTimes"].Value))
-				{
-					int retryTimes = 0;
-					int.TryParse(stepNode.Attributes["RetryTimes"].Value, out retryTimes);
-					workFlowStep.RetryTimes = retryTimes;
-				}
-				if (stepNode.Attributes["WaitBetweenRetriesMilliseconds"] != null && !string.IsNullOrEmpty(stepNode.Attributes["WaitBetweenRetriesMilliseconds"].Value))
-				{
-					int waitBetweenRetriesMilliseconds = 0;
-					int.TryParse(stepNode.Attributes["WaitBetweenRetriesMilliseconds"].Value, out waitBetweenRetriesMilliseconds);
-					workFlowStep.WaitBetweenRetriesMilliseconds = waitBetweenRetriesMilliseconds;
-				}
-				if (stepNode.Attributes["RunMode"] != null && !string.IsNullOrEmpty(stepNode.Attributes["RunMode"].Value))
-					workFlowStep.RunMode = (FrameworkStepRunMode)Enum.Parse(typeof(FrameworkStepRunMode), stepNode.Attributes["RunMode"].Value, true);
-				if (stepNode.Attributes["DependsOn"] != null && !string.IsNullOrEmpty(stepNode.Attributes["DependsOn"].Value))
-					workFlowStep.DependsOn = stepNode.Attributes["DependsOn"].Value;
-				if (stepNode.Attributes["DependsOnGroup"] != null && !string.IsNullOrEmpty(stepNode.Attributes["DependsOnGroup"].Value))
-					workFlowStep.DependsOnGroup = stepNode.Attributes["DependsOnGroup"].Value;
-				if (stepNode.Attributes["WaitForDependsOnMilliseconds"] != null && !string.IsNullOrEmpty(stepNode.Attributes["WaitForDependsOnMilliseconds"].Value))
-				{
-					int waitForDependsOnMilliseconds = int.MaxValue;
-					if (!string.IsNullOrEmpty(stepNode.Attributes["WaitForDependsOnMilliseconds"].Value))
-						int.TryParse(stepNode.Attributes["WaitForDependsOnMilliseconds"].Value, out waitForDependsOnMilliseconds);
-					workFlowStep.WaitForDependsOnMilliseconds = waitForDependsOnMilliseconds;
-				}
-				if (stepNode.Attributes["RunAsDomain"] != null && !string.IsNullOrEmpty(stepNode.Attributes["RunAsDomain"].Value))
-					workFlowStep.RunAsDomain = Utils.GetDecryptedString(stepNode.Attributes["RunAsDomain"].Value);
-				if (stepNode.Attributes["RunAsUser"] != null && !string.IsNullOrEmpty(stepNode.Attributes["RunAsUser"].Value))
-					workFlowStep.RunAsUser = Utils.GetDecryptedString(stepNode.Attributes["RunAsUser"].Value);
-				if (stepNode.Attributes["RunAsPassword"] != null && !string.IsNullOrEmpty(stepNode.Attributes["RunAsPassword"].Value))
-					workFlowStep.RunAsPassword = Utils.GetDecryptedString(stepNode.Attributes["RunAsPassword"].Value);
-				processorJob.WorkFlowSteps.Add(workFlowStep);
-			}
-		}
+        if (Enum.TryParse<MessageQueueType>((string?)jobNode.Attribute("MessageQueueType"), ignoreCase: true, out var mqt))
+            processorJob.MessageQueueType = mqt;
 
-	}
+        var queuesNode = jobNode.Element("Queues");
+        if (queuesNode is not null)
+            LoadJobQueues(processorJob, queuesNode);
+
+        var stepsNode = jobNode.Element("Steps");
+        // Backward compat: pre-2.0 layouts could put <Step> directly under <Job>.
+        LoadJobSteps(processorJob, stepsNode ?? jobNode);
+    }
+
+    private static void LoadJobQueues(ProcessorJob processorJob, XElement queuesNode)
+    {
+        foreach (var queueNode in queuesNode.Elements("Queue"))
+        {
+            var queue = new ProcessorQueue
+            {
+                MessageQueue = (string?)queueNode.Attribute("MessageQueue") ?? string.Empty,
+                ErrorQueue = (string?)queueNode.Attribute("ErrorQueue") ?? string.Empty,
+                PoisonQueue = (string?)queueNode.Attribute("PoisonQueue") ?? string.Empty,
+                CompletedQueue = (string?)queueNode.Attribute("CompletedQueue") ?? string.Empty,
+            };
+
+            if (Enum.TryParse<MessageQueueType>((string?)queueNode.Attribute("MessageQueueType"), ignoreCase: true, out var mqt))
+                queue.MessageQueueType = mqt;
+
+            processorJob.ProcessorQueues.Add(queue);
+        }
+    }
+
+    private static void LoadJobSteps(ProcessorJob processorJob, XElement stepsNode)
+    {
+        foreach (var stepNode in stepsNode.Elements("Step"))
+        {
+            var step = new ProcessorStep
+            {
+                StepName = (string?)stepNode.Attribute("Name") ?? string.Empty,
+                Group = (string?)stepNode.Attribute("Group") ?? string.Empty,
+                InvokeClass = (string?)stepNode.Attribute("InvokeClass") ?? string.Empty,
+                DependsOn = (string?)stepNode.Attribute("DependsOn") ?? string.Empty,
+                DependsOnGroup = (string?)stepNode.Attribute("DependsOnGroup") ?? string.Empty,
+            };
+
+            if (Enum.TryParse<OnFrameworkStepError>((string?)stepNode.Attribute("OnError"), ignoreCase: true, out var onErr))
+                step.OnError = onErr;
+
+            if (int.TryParse((string?)stepNode.Attribute("RetryTimes"), out var retry))
+                step.RetryTimes = retry;
+
+            if (int.TryParse((string?)stepNode.Attribute("WaitBetweenRetriesMilliseconds"), out var waitRetry))
+                step.WaitBetweenRetriesMilliseconds = waitRetry;
+
+            if (int.TryParse((string?)stepNode.Attribute("WaitForDependsOnMilliseconds"), out var waitDep))
+                step.WaitForDependsOnMilliseconds = waitDep;
+
+            step.RunMode = ParseRunMode((string?)stepNode.Attribute("RunMode"));
+
+            // Encrypted attributes (legacy RijndaelEnhanced format preserved).
+            var rad = (string?)stepNode.Attribute("RunAsDomain");
+            if (!string.IsNullOrEmpty(rad)) step.RunAsDomain = Utils.GetDecryptedString(rad);
+            var rau = (string?)stepNode.Attribute("RunAsUser");
+            if (!string.IsNullOrEmpty(rau)) step.RunAsUser = Utils.GetDecryptedString(rau);
+            var rap = (string?)stepNode.Attribute("RunAsPassword");
+            if (!string.IsNullOrEmpty(rap)) step.RunAsPassword = Utils.GetDecryptedString(rap);
+
+            processorJob.WorkFlowSteps.Add(step);
+        }
+    }
+
+    /// <summary>
+    /// Resolve a relative <see cref="EngineOptions.FrameworkConfigLocation"/> against the app
+    /// base directory so the path works regardless of the consumer's current working directory.
+    /// Absolute paths are returned unchanged.
+    /// </summary>
+    private static string ResolvePath(string configured)
+    {
+        if (Path.IsPathRooted(configured)) return configured;
+        var fromBase = Path.Combine(AppContext.BaseDirectory, configured);
+        if (File.Exists(fromBase)) return fromBase;
+        // Fall back to current working directory so callers that explicitly chdir still work.
+        return configured;
+    }
+
+    /// <summary>
+    /// Accept new names (<c>Synchronous</c>/<c>FireAndForget</c>) AND the legacy
+    /// <c>STA</c>/<c>MTA</c> values still present in many v1 Workflow.xml files.
+    /// </summary>
+    private static StepExecutionMode ParseRunMode(string? raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return StepExecutionMode.Synchronous;
+        return raw.Trim().ToUpperInvariant() switch
+        {
+            "STA" => StepExecutionMode.Synchronous,
+            "MTA" => StepExecutionMode.FireAndForget,
+            "SYNCHRONOUS" => StepExecutionMode.Synchronous,
+            "FIREANDFORGET" => StepExecutionMode.FireAndForget,
+            _ => StepExecutionMode.Synchronous,
+        };
+    }
 }
