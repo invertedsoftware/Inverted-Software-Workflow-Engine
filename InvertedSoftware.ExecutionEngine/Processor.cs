@@ -25,9 +25,12 @@ public sealed class Processor : IJobReporter, IDisposable
 
     private ProcessorJob _processorJob = new();
     private IExecutor? _executor;
-    // Currently-selected tier for multi-queue consumers. Reads in error/complete handlers
-    // route secondary publishes to the same tier the message was consumed from.
-    private int _currentTier;
+    // The tier the *currently-executing job* was consumed from. Stored as an
+    // AsyncLocal<int> so that multiple in-flight jobs each carry their own value
+    // along their async-flow — without it, the outer consume loop's tier
+    // re-selection would race with in-flight jobs' IJobReporter callbacks and
+    // route Error / Poison / Completed messages to the wrong tier.
+    private readonly AsyncLocal<int> _ambientTier = new();
     // Two-stage cancellation:
     //   _stopConsumingCts fires first (StopFrameworkAsync, soft and hard) and unblocks
     //     the ConsumeAsync iterator so no new messages are picked up.
@@ -125,11 +128,14 @@ public sealed class Processor : IJobReporter, IDisposable
 
         // Outer loop: pick a tier, consume from it until the rebalance timer or an
         // error forces us to re-evaluate. Stops only when stopConsuming fires.
+        // `selectedTier` is the *outer loop's* state — local because rebalance may
+        // change it while in-flight jobs (which carry their own `_ambientTier.Value`)
+        // continue to use whatever tier their message came from.
         while (!stopConsuming.IsCancellationRequested)
         {
-            _currentTier = await SelectBestTierAsync(shutdown).ConfigureAwait(false);
+            var selectedTier = await SelectBestTierAsync(shutdown).ConfigureAwait(false);
             if (TierCount > 1)
-                Log.ConsumingFromTier(_logger, _processorJob.JobName, _currentTier);
+                Log.ConsumingFromTier(_logger, _processorJob.JobName, selectedTier);
 
             // The rebalance CTS fires after the interval, forcing the consume iterator
             // to exit and the outer loop to re-select. This is how a multi-tier
@@ -143,7 +149,7 @@ public sealed class Processor : IJobReporter, IDisposable
             try
             {
                 await foreach (var received in _host.QueueProvider
-                    .ConsumeAsync(_processorJob.JobName, consumeOptions, _currentTier, consumeToken)
+                    .ConsumeAsync(_processorJob.JobName, consumeOptions, selectedTier, consumeToken)
                     .ConfigureAwait(false))
                 {
                     // Bound the pool wait to `shutdown` (not consumeToken) so a soft-stop
@@ -153,7 +159,7 @@ public sealed class Processor : IJobReporter, IDisposable
                     WorkflowTelemetry.JobsInFlight.Add(1,
                         new KeyValuePair<string, object?>("job", _processorJob.JobName));
 
-                    var capturedTier = _currentTier;
+                    var capturedTier = selectedTier;
                     _ = Task.Run(() => RunFrameworkJobAsync(received, capturedTier, shutdown), CancellationToken.None);
                 }
             }
@@ -167,8 +173,9 @@ public sealed class Processor : IJobReporter, IDisposable
             }
             catch (QueueUnavailableException e)
             {
-                Log.ConsumerTierUnavailable(_logger, e, _processorJob.JobName, _currentTier);
-                await Task.Delay(TimeSpan.FromSeconds(2), stopConsuming).ConfigureAwait(false);
+                Log.ConsumerTierUnavailable(_logger, e, _processorJob.JobName, selectedTier);
+                try { await Task.Delay(TimeSpan.FromSeconds(2), stopConsuming).ConfigureAwait(false); }
+                catch (OperationCanceledException) { return; }
             }
         }
     }
@@ -188,6 +195,7 @@ public sealed class Processor : IJobReporter, IDisposable
 
         for (var tier = count - 1; tier >= 0; tier--)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             try
             {
                 var health = await _host.QueueProvider
@@ -196,7 +204,11 @@ public sealed class Processor : IJobReporter, IDisposable
                 if (health.MainAvailable && (health.ApproximateMainDepth ?? 0) > 0)
                     return tier;
             }
-            catch
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw; // honour shutdown; don't keep probing tiers
+            }
+            catch (QueueProviderException)
             {
                 // Tier unreachable; try the next one.
             }
@@ -214,7 +226,8 @@ public sealed class Processor : IJobReporter, IDisposable
         // Stash the tier the consumer was on when this message was received, so
         // the IJobReporter implementation routes secondary publishes to the same
         // tier (Error+Poison+Completed colocate with where the work came from).
-        _currentTier = tier;
+        // AsyncLocal so concurrent jobs don't clobber each other's value.
+        _ambientTier.Value = tier;
 
         // Start a consumer-side Activity linked to the producer's traceparent.
         using var activity = StartConsumeActivity(received, jobName);
@@ -352,7 +365,7 @@ public sealed class Processor : IJobReporter, IDisposable
         => ReportJobErrorAsync(exception, workflowStep, workflowMessage, currentJob, cancellationToken);
 
     Task IJobReporter.ReportJobCompleteAsync(IWorkflowMessage workflowMessage, ProcessorJob currentJob, CancellationToken cancellationToken)
-        => QueueOperationsHandler.HandleCompleteAsync(_host, currentJob.JobName, _currentTier, workflowMessage, cancellationToken);
+        => QueueOperationsHandler.HandleCompleteAsync(_host, currentJob.JobName, _ambientTier.Value, TierCount, workflowMessage, cancellationToken);
 
     private Task ReportJobErrorAsync(Exception exception, ProcessorStep workflowStep, IWorkflowMessage workflowMessage, ProcessorJob currentJob, CancellationToken cancellationToken)
     {
@@ -368,7 +381,7 @@ public sealed class Processor : IJobReporter, IDisposable
             error.ExceptionMessage += $"|{inner.Message}";
             inner = inner.InnerException;
         }
-        return QueueOperationsHandler.HandleErrorAsync(_host, currentJob.JobName, _currentTier, workflowMessage, error, cancellationToken);
+        return QueueOperationsHandler.HandleErrorAsync(_host, currentJob.JobName, _ambientTier.Value, TierCount, workflowMessage, error, cancellationToken);
     }
 
     private async Task PublishPoisonAsync(IReceivedMessage received, string reason, CancellationToken cancellationToken)
@@ -385,7 +398,7 @@ public sealed class Processor : IJobReporter, IDisposable
         {
             // Poison goes to the SAME tier the message came from.
             await _host.QueueProvider.PublishAsync(
-                new LogicalQueue(_processorJob.JobName, LogicalQueueKind.Poison, _currentTier),
+                new LogicalQueue(_processorJob.JobName, LogicalQueueKind.Poison, _ambientTier.Value),
                 received.Body,
                 headers,
                 cancellationToken).ConfigureAwait(false);
